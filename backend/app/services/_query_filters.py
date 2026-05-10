@@ -48,6 +48,7 @@ def credit_card_bill_scope(
             not_(and_(
                 Transaction.source == "sync",
                 Transaction.status == "pending",
+                Transaction.effective_bill_date.is_(None),
                 Transaction.effective_date != active_due_subq,
             )),
         ]

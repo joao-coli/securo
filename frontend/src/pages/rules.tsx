@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { categories as categoriesApi, rules as rulesApi, accounts as accountsApi, payees as payeesApi, fundingDomains as fundingDomainsApi } from '@/lib/api'
+import { categories as categoriesApi, categoryGroups as categoryGroupsApi, rules as rulesApi, accounts as accountsApi, payees as payeesApi, fundingDomains as fundingDomainsApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -15,9 +15,10 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import type { Category, FundingDomain, Payee, Rule, RuleCondition, RuleAction } from '@/types'
+import type { Category, CategoryGroup, FundingDomain, Payee, Rule, RuleCondition, RuleAction } from '@/types'
 import { Trash2, Plus, RefreshCw, X, Package, Check, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { CategorySelect } from '@/components/category-select'
 import { PageHeader } from '@/components/page-header'
 
 function SectionCard({ children }: { children: React.ReactNode }) {
@@ -131,6 +132,11 @@ export default function RulesPage() {
   const { data: categoriesList } = useQuery({
     queryKey: ['categories'],
     queryFn: categoriesApi.list,
+  })
+
+  const { data: categoryGroupsList } = useQuery({
+    queryKey: ['categoryGroups'],
+    queryFn: categoryGroupsApi.list,
   })
 
   const { data: accountsList } = useQuery({
@@ -342,6 +348,7 @@ export default function RulesPage() {
         onClose={() => { setDialogOpen(false); setEditing(null) }}
         rule={editing}
         categories={categories}
+        categoryGroups={categoryGroupsList ?? []}
         accounts={accountsList ?? []}
         payees={payees}
         fundingDomains={fundingDomains}
@@ -361,6 +368,7 @@ export default function RulesPage() {
 function RulePacksDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
+  const [createMissingCategories, setCreateMissingCategories] = useState(true)
 
   const { data: rulePacks } = useQuery({
     queryKey: ['rule-packs'],
@@ -369,12 +377,26 @@ function RulePacksDialog({ open, onClose }: { open: boolean; onClose: () => void
   })
 
   const installPackMutation = useMutation({
-    mutationFn: (code: string) => rulesApi.installPack(code),
+    mutationFn: (code: string) => rulesApi.installPack(code, createMissingCategories),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['rules'] })
       queryClient.invalidateQueries({ queryKey: ['rule-packs'] })
+      if (data.categories_created > 0) {
+        queryClient.invalidateQueries({ queryKey: ['categories'] })
+      }
       if (data.installed === 0) {
-        toast.info(t('rules.packAlreadyInstalled'))
+        if (data.unresolved > 0) {
+          toast.error(t('rules.packMissingCategories'))
+        } else {
+          toast.info(t('rules.packAlreadyInstalled'))
+        }
+      } else if (data.categories_created > 0) {
+        toast.success(
+          t('rules.packInstalledWithCategories', {
+            rules: data.installed,
+            categories: data.categories_created,
+          }),
+        )
       } else {
         toast.success(t('rules.packInstalled', { count: data.installed }))
       }
@@ -388,6 +410,21 @@ function RulePacksDialog({ open, onClose }: { open: boolean; onClose: () => void
         <DialogHeader>
           <DialogTitle>{t('rules.packs')}</DialogTitle>
         </DialogHeader>
+        <div className="flex items-center gap-2 px-1">
+          <input
+            type="checkbox"
+            id="create-missing-categories"
+            checked={createMissingCategories}
+            onChange={(e) => setCreateMissingCategories(e.target.checked)}
+            className="rounded border-border text-primary focus:ring-primary"
+          />
+          <Label
+            htmlFor="create-missing-categories"
+            className="text-xs text-muted-foreground cursor-pointer"
+          >
+            {t('rules.createMissingCategories')}
+          </Label>
+        </div>
         <div className="space-y-2">
           {rulePacks?.map((pack) => (
             <div
@@ -427,12 +464,13 @@ function RulePacksDialog({ open, onClose }: { open: boolean; onClose: () => void
 }
 
 function RuleDialog({
-  open, onClose, rule, categories, accounts, payees, fundingDomains, onSave, loading,
+  open, onClose, rule, categories, categoryGroups, accounts, payees, fundingDomains, onSave, loading,
 }: {
   open: boolean
   onClose: () => void
   rule: Rule | null
   categories: Category[]
+  categoryGroups: CategoryGroup[]
   accounts: { id: string; name: string }[]
   payees: Payee[]
   fundingDomains: FundingDomain[]
@@ -618,17 +656,16 @@ function RuleDialog({
                     <option value="append_notes">{t('rules.appendNotes')}</option>
                   </select>
                   {action.op === 'set_category' ? (
-                    <select
-                      className={`${selectClass} w-0 flex-1 min-w-0`}
-                      value={action.value}
-                      onChange={(e) => updateAction(i, { value: e.target.value })}
-                      required
-                    >
-                      <option value="">{t('rules.selectCategory')}</option>
-                      {categories.map(cat => (
-                        <option key={cat.id} value={cat.id}>{cat.name}</option>
-                      ))}
-                    </select>
+                    <div className="w-0 flex-1 min-w-0">
+                      <CategorySelect
+                        value={action.value}
+                        onChange={(val) => updateAction(i, { value: val })}
+                        categories={categories}
+                        groups={categoryGroups}
+                        placeholder={t('rules.selectCategory')}
+                        className={`${selectClass} w-full`}
+                      />
+                    </div>
                   ) : action.op === 'set_payee' ? (
                     <select
                       className={`${selectClass} w-0 flex-1 min-w-0`}
