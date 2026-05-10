@@ -17,6 +17,7 @@ class RecurringTransactionCreate(BaseModel):
     end_date: Optional[_Date] = None
     account_id: uuid.UUID
     category_id: Optional[uuid.UUID] = None
+    funding_domain_id: Optional[uuid.UUID] = None
     skip_first: bool = False  # Set true when first occurrence already created as a transaction
 
 
@@ -31,6 +32,7 @@ class RecurringTransactionUpdate(BaseModel):
     end_date: Optional[_Date] = None
     account_id: Optional[uuid.UUID] = None
     category_id: Optional[uuid.UUID] = None
+    funding_domain_id: Optional[uuid.UUID] = None
     is_active: Optional[bool] = None
 
 
@@ -39,6 +41,7 @@ class RecurringTransactionRead(BaseModel):
     user_id: uuid.UUID
     account_id: Optional[uuid.UUID] = None
     category_id: Optional[uuid.UUID] = None
+    funding_domain_id: Optional[uuid.UUID] = None
     description: str
     amount: Decimal
     currency: str

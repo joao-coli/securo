@@ -11,7 +11,7 @@ from app.models.bank_connection import BankConnection
 from app.models.credit_card_bill import CreditCardBill
 from app.models.transaction import Transaction
 from app.schemas.account import AccountCreate, AccountUpdate
-from app.services._query_filters import counts_as_pnl
+from app.services._query_filters import counts_as_pnl, credit_card_bill_bucket_date, credit_card_bill_scope
 from app.services.credit_card_service import apply_effective_date, compute_available_credit, get_cycle_dates
 
 
@@ -568,41 +568,18 @@ async def get_account_summary(
     # Bucketing date: for credit-card txs the user can override which cycle
     # a tx belongs to via `effective_bill_date`. We honor that first so the
     # totals card and bar chart agree with the transactions list (issue #92).
-    bucket_date = func.coalesce(Transaction.effective_bill_date, Transaction.date)
-
-    # Bill-driven filter (issue #92): when the caller passes bill_id, include
-    #   (a) txs linked to this bill via Pluggy's billId mapping, AND
-    #   (b) txs with NO bill_id (manual entries, OFX/CSV imports, recurring
-    #       fills) whose bucketing date is in the cycle window — without (b)
-    #       we'd drop user-added compensations for missing provider txs.
-    # Without bill_id (cycle-math or non-CC), apply the date window straight.
-    from sqlalchemy import and_ as _and, not_ as _not  # local: only for scope
-    # Resolve the active bill's due_date once so the pending-exclusion can
-    # trust our cycle-math pre-classification (see get_transactions).
-    active_due_subq = (
-        select(CreditCardBill.due_date)
-        .where(CreditCardBill.id == bill_id)
-        .scalar_subquery()
-    ) if bill_id is not None else None
+    bucket_date = credit_card_bill_bucket_date()
 
     def _scope(query):
         if bill_id is not None:
-            unlinked_in_window = _and(
-                Transaction.bill_id.is_(None),
-                # Defer sync-pending txs only when their effective_date does
-                # NOT match this bill — i.e., cycle math placed them in a
-                # different bill. If effective_date matches, the tx is
-                # pre-classified to this bill and we include it (the
-                # in-progress case abdalanervoso reported empty).
-                _not(_and(
-                    Transaction.source == "sync",
-                    Transaction.status == "pending",
-                    Transaction.effective_date != active_due_subq,
-                )),
-                bucket_date >= date_from,
-                bucket_date <= date_to,
+            return query.where(
+                credit_card_bill_scope(
+                    bill_id,
+                    date_from=date_from,
+                    date_to=date_to,
+                    bucket_date=bucket_date,
+                )
             )
-            return query.where(or_(Transaction.bill_id == bill_id, unlinked_in_window))
         # Cycle-math fallback. Opt-in `unbilled_only` excludes already-billed
         # txs so an in-progress cycle's bar/total doesn't double-count past-
         # bill txs whose date falls in the window (see get_transactions).
@@ -658,6 +635,7 @@ async def get_account_summary(
         "current_balance": current_balance,
         "monthly_income": monthly_income,
         "monthly_expenses": monthly_expenses,
+        "_currency": account.currency,
     }
 
 

@@ -13,6 +13,7 @@ from app.core.database import Base
 if TYPE_CHECKING:
     from app.models.account import Account
     from app.models.category import Category
+    from app.models.funding_domain import FundingDomain
     from app.models.user import User
 
 
@@ -26,6 +27,7 @@ class RecurringTransaction(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     account_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id", ondelete="CASCADE"), nullable=True)
     category_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
+    funding_domain_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("funding_domains.id"), nullable=True)
     description: Mapped[str] = mapped_column(String(500))
     amount: Mapped[Decimal] = mapped_column(Numeric(precision=15, scale=2))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
@@ -43,3 +45,4 @@ class RecurringTransaction(Base):
     user: Mapped["User"] = relationship()
     account: Mapped[Optional["Account"]] = relationship()
     category: Mapped[Optional["Category"]] = relationship()
+    funding_domain: Mapped[Optional["FundingDomain"]] = relationship()

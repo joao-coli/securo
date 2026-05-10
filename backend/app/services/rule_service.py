@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rule import Rule
 from app.models.category import Category
+from app.models.funding_domain import FundingDomain
 from app.models.transaction import Transaction
 from app.schemas.rule import RuleCreate, RuleUpdate
 from app.services.rule_engine import evaluate_conditions, apply_rule_actions
@@ -16,6 +17,88 @@ from app.services.category_service import DEFAULT_CATEGORIES_I18N
 class DuplicateRuleError(Exception):
     """Raised when a rule with the same name already exists for a user."""
     pass
+
+
+class InvalidRuleActionError(Exception):
+    """Raised when a rule action references data the user cannot assign."""
+    pass
+
+
+def _funding_domain_action_ids(actions: list[dict]) -> set[uuid.UUID]:
+    domain_ids: set[uuid.UUID] = set()
+    for action in actions:
+        if action.get("op") != "set_funding_domain":
+            continue
+        try:
+            domain_ids.add(uuid.UUID(str(action.get("value"))))
+        except (ValueError, AttributeError, TypeError):
+            raise InvalidRuleActionError("Funding domain not found")
+    return domain_ids
+
+
+async def _validate_rule_actions(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    actions: list[dict],
+) -> None:
+    domain_ids = _funding_domain_action_ids(actions)
+    if not domain_ids:
+        return
+    result = await session.execute(
+        select(FundingDomain.id).where(
+            FundingDomain.id.in_(domain_ids),
+            FundingDomain.user_id == user_id,
+            FundingDomain.is_active.is_(True),
+        )
+    )
+    if set(result.scalars().all()) != domain_ids:
+        raise InvalidRuleActionError("Funding domain not found")
+
+
+async def _assignable_funding_domain_ids(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    rules: list[Rule],
+) -> set[uuid.UUID]:
+    requested_ids: set[uuid.UUID] = set()
+    for rule in rules:
+        try:
+            requested_ids.update(_funding_domain_action_ids(rule.actions or []))
+        except InvalidRuleActionError:
+            continue
+
+    if not requested_ids:
+        return set()
+    result = await session.execute(
+        select(FundingDomain.id).where(
+            FundingDomain.id.in_(requested_ids),
+            FundingDomain.user_id == user_id,
+            FundingDomain.is_active.is_(True),
+        )
+    )
+    return set(result.scalars().all())
+
+
+def _safe_rule_actions(
+    actions: list[dict],
+    assignable_funding_domain_ids: set[uuid.UUID],
+) -> list[dict]:
+    safe_actions: list[dict] = []
+    for action in actions:
+        if action.get("op") != "set_funding_domain":
+            safe_actions.append(action)
+            continue
+        try:
+            domain_id = uuid.UUID(str(action.get("value")))
+        except (ValueError, AttributeError, TypeError):
+            continue
+        if domain_id in assignable_funding_domain_ids:
+            safe_actions.append(action)
+    return safe_actions
+
+
+def _sets_funding_domain(actions: list[dict]) -> bool:
+    return any(action.get("op") == "set_funding_domain" for action in actions)
 
 
 # ─── Universal rules (work for any language/country) ───
@@ -575,13 +658,15 @@ async def create_rule(session: AsyncSession, user_id: uuid.UUID, data: RuleCreat
     existing_names = await _get_existing_rule_names(session, user_id)
     if data.name in existing_names:
         raise DuplicateRuleError(f"A rule named '{data.name}' already exists")
+    actions = [a.model_dump() for a in data.actions]
+    await _validate_rule_actions(session, user_id, actions)
 
     rule = Rule(
         user_id=user_id,
         name=data.name,
         conditions_op=data.conditions_op,
         conditions=[c.model_dump() for c in data.conditions],
-        actions=[a.model_dump() for a in data.actions],
+        actions=actions,
         priority=data.priority,
         is_active=data.is_active,
     )
@@ -609,6 +694,7 @@ async def update_rule(
         update_data["conditions"] = [c.model_dump() for c in data.conditions]
     if "actions" in update_data and update_data["actions"] is not None:
         update_data["actions"] = [a.model_dump() for a in data.actions]
+        await _validate_rule_actions(session, user_id, update_data["actions"])
 
     for key, value in update_data.items():
         setattr(rule, key, value)
@@ -637,12 +723,13 @@ async def apply_rules_to_transaction(
         .order_by(Rule.priority, Rule.id)
     )
     rules = result.scalars().all()
+    assignable_funding_domain_ids = await _assignable_funding_domain_ids(session, user_id, list(rules))
 
     category_set = transaction.category_id is not None
 
     for rule in rules:
         conditions = rule.conditions or []
-        actions = rule.actions or []
+        actions = _safe_rule_actions(rule.actions or [], assignable_funding_domain_ids)
         if evaluate_conditions(rule.conditions_op, conditions, transaction):
             category_set = apply_rule_actions(actions, transaction, category_set)
 
@@ -673,21 +760,26 @@ async def apply_all_rules(session: AsyncSession, user_id: uuid.UUID) -> int:
         .order_by(Rule.priority, Rule.id)
     )
     rules = rules_result.scalars().all()
+    assignable_funding_domain_ids = await _assignable_funding_domain_ids(session, user_id, list(rules))
 
     count = 0
     for tx in transactions:
         matched = False
         category_set = False
+        reset_funding_domain = False
 
         for rule in rules:
             conditions = rule.conditions or []
-            actions = rule.actions or []
+            actions = _safe_rule_actions(rule.actions or [], assignable_funding_domain_ids)
             if evaluate_conditions(rule.conditions_op, conditions, tx):
                 if not matched:
                     # First match: reset so rules are applied from scratch
                     tx.category_id = None
                     tx.notes = None
                     matched = True
+                if not reset_funding_domain and _sets_funding_domain(actions):
+                    tx.funding_domain_id = None
+                    reset_funding_domain = True
                 category_set = apply_rule_actions(actions, tx, category_set)
 
         if matched:

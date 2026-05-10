@@ -1,7 +1,8 @@
 import uuid
+from collections.abc import Awaitable
 from datetime import date
 from decimal import Decimal
-from typing import Optional
+from typing import Optional, TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,10 +17,26 @@ from app.schemas.account import (
     AccountUpdate,
     CreditCardBillRead,
 )
+from app.schemas.credit_card_payment_allocation import (
+    CreditCardPaymentCandidate,
+    CreditCardPaymentAllocationCreate,
+    CreditCardPaymentAllocationRead,
+    CreditCardPaymentAllocationUpdate,
+    StatementFundingReport,
+)
 from app.services import account_service
+from app.services import statement_funding_service
 from app.services.fx_rate_service import convert
 
 router = APIRouter(prefix="/api/accounts", tags=["accounts"])
+T = TypeVar("T")
+
+
+async def _or_bad_request(action: Awaitable[T]) -> T:
+    try:
+        return await action
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.get("", response_model=list[AccountRead])
@@ -58,12 +75,12 @@ async def get_account_summary(
     if not summary:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
 
-    account = await account_service.get_account(session, account_id, user.id)
+    account_currency = summary.pop("_currency", None)
     primary_currency = user.primary_currency
-    if account and account.currency != primary_currency:
-        bal, _ = await convert(session, Decimal(str(summary["current_balance"])), account.currency, primary_currency)
-        inc, _ = await convert(session, Decimal(str(summary["monthly_income"])), account.currency, primary_currency)
-        exp, _ = await convert(session, Decimal(str(summary["monthly_expenses"])), account.currency, primary_currency)
+    if account_currency and account_currency != primary_currency:
+        bal, _ = await convert(session, Decimal(str(summary["current_balance"])), account_currency, primary_currency)
+        inc, _ = await convert(session, Decimal(str(summary["monthly_income"])), account_currency, primary_currency)
+        exp, _ = await convert(session, Decimal(str(summary["monthly_expenses"])), account_currency, primary_currency)
         summary["current_balance_primary"] = float(bal)
         summary["monthly_income_primary"] = float(inc)
         summary["monthly_expenses_primary"] = float(exp)
@@ -119,6 +136,122 @@ async def get_account_bills(
     if bills is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Account not found")
     return bills
+
+
+@router.get("/{account_id}/payment-allocations", response_model=list[CreditCardPaymentAllocationRead])
+async def list_payment_allocations(
+    account_id: uuid.UUID,
+    bill_id: Optional[uuid.UUID] = Query(None),
+    date_from: Optional[date] = Query(None, alias="from"),
+    date_to: Optional[date] = Query(None, alias="to"),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    return await _or_bad_request(
+        statement_funding_service.list_payment_allocations(
+            session,
+            user.id,
+            account_id,
+            bill_id=bill_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
+
+
+@router.get("/{account_id}/payment-candidates", response_model=list[CreditCardPaymentCandidate])
+async def list_payment_candidates(
+    account_id: uuid.UUID,
+    date_from: Optional[date] = Query(None, alias="from"),
+    date_to: Optional[date] = Query(None, alias="to"),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    return await _or_bad_request(
+        statement_funding_service.list_payment_candidates(
+            session,
+            user.id,
+            account_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
+
+
+@router.post(
+    "/{account_id}/payment-allocations",
+    response_model=CreditCardPaymentAllocationRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_payment_allocation(
+    account_id: uuid.UUID,
+    data: CreditCardPaymentAllocationCreate,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    return await _or_bad_request(
+        statement_funding_service.create_payment_allocation(
+            session, user.id, account_id, data
+        )
+    )
+
+
+@router.patch(
+    "/{account_id}/payment-allocations/{allocation_id}",
+    response_model=CreditCardPaymentAllocationRead,
+)
+async def update_payment_allocation(
+    account_id: uuid.UUID,
+    allocation_id: uuid.UUID,
+    data: CreditCardPaymentAllocationUpdate,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    allocation = await _or_bad_request(
+        statement_funding_service.update_payment_allocation(
+            session, user.id, account_id, allocation_id, data
+        )
+    )
+    if not allocation:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment allocation not found")
+    return allocation
+
+
+@router.delete("/{account_id}/payment-allocations/{allocation_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_payment_allocation(
+    account_id: uuid.UUID,
+    allocation_id: uuid.UUID,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    deleted = await _or_bad_request(
+        statement_funding_service.delete_payment_allocation(
+            session, user.id, account_id, allocation_id
+        )
+    )
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Payment allocation not found")
+
+
+@router.get("/{account_id}/statement-funding", response_model=StatementFundingReport)
+async def get_statement_funding(
+    account_id: uuid.UUID,
+    bill_id: Optional[uuid.UUID] = Query(None),
+    date_from: Optional[date] = Query(None, alias="from"),
+    date_to: Optional[date] = Query(None, alias="to"),
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    return await _or_bad_request(
+        statement_funding_service.get_statement_funding_report(
+            session,
+            user.id,
+            account_id,
+            bill_id=bill_id,
+            date_from=date_from,
+            date_to=date_to,
+        )
+    )
 
 
 @router.get("/{account_id}", response_model=AccountRead)

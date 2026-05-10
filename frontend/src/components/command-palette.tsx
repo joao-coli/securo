@@ -58,6 +58,7 @@ const NAV_ITEMS: StaticItem[] = [
   { id: 'nav-goals', labelKey: 'nav.goals', icon: Target, path: '/goals', keywords: ['metas'] },
   { id: 'nav-recurring', labelKey: 'nav.recurring', icon: Repeat, path: '/recurring', keywords: ['recorrentes'] },
   { id: 'nav-categories', labelKey: 'nav.categories', icon: Tag, path: '/categories', keywords: ['categorias'] },
+  { id: 'nav-funding-domains', labelKey: 'nav.fundingDomains', icon: Wallet, path: '/funding-domains', keywords: ['funding', 'domains', 'buckets', 'caixinhas', 'dominios', 'domínios', 'custeio'] },
   { id: 'nav-payees', labelKey: 'nav.payees', icon: Users, path: '/payees', keywords: ['beneficiarios', 'beneficiários'] },
   { id: 'nav-rules', labelKey: 'nav.rules', icon: SlidersHorizontal, path: '/rules', keywords: ['regras'] },
 ]

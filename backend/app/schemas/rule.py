@@ -12,7 +12,7 @@ class RuleCondition(BaseModel):
 
 
 class RuleAction(BaseModel):
-    op: str      # set_category, append_notes
+    op: str      # set_category, set_payee, set_funding_domain, append_notes
     value: Any   # category UUID str or notes string
 
 

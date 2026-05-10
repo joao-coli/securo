@@ -14,7 +14,9 @@ from app.models.bank_connection import BankConnection
 from app.models.payee import Payee
 from app.schemas.transaction import TransactionCreate, TransactionUpdate, TransferCreate
 from app.services import split_service
+from app.services._query_filters import credit_card_bill_bucket_date, credit_card_bill_scope
 from app.services.credit_card_service import apply_effective_date
+from app.services.funding_domain_service import get_assignable_funding_domain
 from app.services.rule_service import apply_rules_to_transaction
 from app.services.fx_rate_service import stamp_primary_amount, convert as fx_convert
 
@@ -100,10 +102,7 @@ async def get_transactions(
     # effective_date points at the next bill's due date because the cycle
     # window [prev_close, this_close-1] doesn't contain the future
     # effective_date (issue #92, abdalanervoso's accrual case).
-    bill_view_date_col = func.coalesce(
-        Transaction.effective_bill_date,
-        Transaction.date,
-    )
+    bill_view_date_col = credit_card_bill_bucket_date()
     in_bill_view = bill_id is not None or unbilled_only
     filter_date_col = bill_view_date_col if in_bill_view else date_col
     # Base query: user's own transactions (manual or via account), or
@@ -115,6 +114,7 @@ async def get_transactions(
         .outerjoin(Payee, Transaction.payee_id == Payee.id)
         .options(
             selectinload(Transaction.category),
+            selectinload(Transaction.funding_domain),
             selectinload(Transaction.account),
             selectinload(Transaction.payee_entity),
             selectinload(Transaction.splits),
@@ -194,41 +194,14 @@ async def get_transactions(
     # Without bill_id (cycle-math cycles or non-CC), apply the date window
     # straight to all txs.
     if bill_id is not None:
-        from app.models.credit_card_bill import CreditCardBill  # local — avoid cycle
-        bill_predicates = [Transaction.bill_id == bill_id]
-        if from_date or to_date:
-            from sqlalchemy import and_ as _and, not_ as _not
-            # Resolve the active bill's due_date once so we can trust
-            # cycle-math classification when Pluggy hasn't tagged a tx yet.
-            active_due_subq = (
-                select(CreditCardBill.due_date)
-                .where(CreditCardBill.id == bill_id)
-                .scalar_subquery()
+        base_query = base_query.where(
+            credit_card_bill_scope(
+                bill_id,
+                date_from=from_date,
+                date_to=to_date,
+                bucket_date=filter_date_col,
             )
-            unlinked_clauses = [
-                Transaction.bill_id.is_(None),
-                # Sync-pending txs without a billId are normally deferred
-                # (provider hasn't classified them) — but if our cycle-math
-                # `apply_effective_date` already pre-classified them to THIS
-                # bill's due_date, trust it and include them. That's the
-                # in-progress case: pending charges the user can already see
-                # in their bank app, classified by close-date math we
-                # computed at sync time. Past closed bills aren't affected
-                # because pending txs there have effective_date pointing
-                # forward to a later bill (ingrid's case stays clean).
-                # Issue #92, abdalanervoso's empty-May.
-                _not(_and(
-                    Transaction.source == "sync",
-                    Transaction.status == "pending",
-                    Transaction.effective_date != active_due_subq,
-                )),
-            ]
-            if from_date:
-                unlinked_clauses.append(filter_date_col >= from_date)
-            if to_date:
-                unlinked_clauses.append(filter_date_col <= to_date)
-            bill_predicates.append(_and(*unlinked_clauses))
-        base_query = base_query.where(or_(*bill_predicates))
+        )
     else:
         # Cycle-math fallback (no bill_id was passed). The opt-in
         # `unbilled_only` flag is for callers that need the in-progress
@@ -451,6 +424,7 @@ async def get_transaction(
         )
         .options(
             selectinload(Transaction.category),
+            selectinload(Transaction.funding_domain),
             selectinload(Transaction.payee_entity),
             selectinload(Transaction.splits),
         )
@@ -486,6 +460,9 @@ async def create_transaction(
     if not account:
         raise ValueError("Account not found")
 
+    if data.funding_domain_id is not None:
+        await get_assignable_funding_domain(session, data.funding_domain_id, user_id)
+
     # Resolve currency: explicit value > account currency
     currency = data.currency or account.currency
 
@@ -493,6 +470,7 @@ async def create_transaction(
         user_id=user_id,
         account_id=data.account_id,
         category_id=data.category_id,  # use provided category if given
+        funding_domain_id=data.funding_domain_id,
         payee_id=data.payee_id,
         description=data.description,
         amount=data.amount,
@@ -506,8 +484,8 @@ async def create_transaction(
     session.add(transaction)
     await session.flush()  # get ID without committing
 
-    # Apply rules only if no explicit category provided
-    if not data.category_id:
+    # Apply rules only for fields the user did not set explicitly.
+    if not data.category_id or not data.funding_domain_id:
         await apply_rules_to_transaction(session, user_id, transaction)
 
     # Stamp primary currency amount (manual override or auto)
@@ -666,6 +644,7 @@ async def get_transfer_candidates(
         )
         .options(
             selectinload(Transaction.category),
+            selectinload(Transaction.funding_domain),
             selectinload(Transaction.account),
             selectinload(Transaction.payee_entity),
             selectinload(Transaction.splits),
@@ -859,6 +838,10 @@ async def update_transaction(
             if paired_tx and paired_tx.account_id == new_account_id:
                 raise ValueError("Cannot move transfer to the same account as its paired transaction")
 
+    new_funding_domain_id = update_data.get("funding_domain_id")
+    if new_funding_domain_id is not None and new_funding_domain_id != transaction.funding_domain_id:
+        await get_assignable_funding_domain(session, new_funding_domain_id, user_id)
+
     # Pop FX override fields before generic setattr loop
     override_amount_primary = update_data.pop("amount_primary", None)
     override_fx_rate = update_data.pop("fx_rate_used", None)
@@ -941,6 +924,41 @@ async def bulk_update_category(
             Transaction.user_id == user_id,
         )
         .values(category_id=category_id)
+    )
+    await session.commit()
+    return result.rowcount
+
+
+async def bulk_update_funding_domain(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    transaction_ids: list[uuid.UUID],
+    funding_domain_id: Optional[uuid.UUID] = None,
+) -> int:
+    if not transaction_ids:
+        return 0
+    if funding_domain_id is not None:
+        await get_assignable_funding_domain(session, funding_domain_id, user_id)
+
+    eligible_ids = (
+        select(Transaction.id)
+        .join(Account, Account.id == Transaction.account_id)
+        .where(
+            Transaction.id.in_(transaction_ids),
+            Transaction.user_id == user_id,
+            Transaction.type == "debit",
+            Transaction.source != "opening_balance",
+            Transaction.transfer_pair_id.is_(None),
+            Account.type == "credit_card",
+        )
+    )
+    result = await session.execute(
+        update(Transaction)
+        .where(
+            Transaction.id.in_(eligible_ids),
+        )
+        .values(funding_domain_id=funding_domain_id)
+        .execution_options(synchronize_session=False)
     )
     await session.commit()
     return result.rowcount

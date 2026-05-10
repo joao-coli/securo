@@ -5,13 +5,13 @@ import { useTranslation } from 'react-i18next'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, addDays, addMonths, parseISO } from 'date-fns'
 import { ptBR, enUS } from 'date-fns/locale'
-import { accounts, transactions, categories as categoriesApi } from '@/lib/api'
+import { accounts, transactions, categories as categoriesApi, fundingDomains as fundingDomainsApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
-import type { CreditCardBill, Transaction } from '@/types'
+import type { CreditCardBill, CreditCardPaymentAllocation, CreditCardPaymentCandidate, FundingDomain, Transaction } from '@/types'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, ArrowLeftRight, ChevronLeft, ChevronRight, Clock, HelpCircle, Paperclip, Pencil, X } from 'lucide-react'
+import { ArrowLeft, ArrowLeftRight, ChevronLeft, ChevronRight, Clock, HelpCircle, Paperclip, Pencil, Trash2, X } from 'lucide-react'
 import { CategoryIcon } from '@/components/category-icon'
 import { TransactionDialog, extractApiError } from '@/components/transaction-dialog'
 import { TransferDialog } from '@/components/transfer-dialog'
@@ -22,6 +22,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
+import { cn } from '@/lib/utils'
 import {
   AreaChart,
   Area,
@@ -145,10 +146,6 @@ function creditCardCycleLabel(
   return format(bill, 'MMM yyyy', { locale: dateFnsLocale })
 }
 
-/** Return the [start, end] dates of the billing cycle that CONTAINS `reference`.
- * Brazilian convention: a transaction ON the close day belongs to the NEXT
- * cycle, so the cycle boundaries are [previous close day, next close day − 1].
- * Falls back to "previous month → today" when no closeDay is configured. */
 /** Derive a bill's cycle close date from the account's statement_close_day.
  * Pluggy doesn't expose the close date directly, but it's recoverable: the
  * close is the most recent occurrence of close_day on or before the bill's
@@ -271,6 +268,14 @@ export default function AccountDetailPage() {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
+  const [editingAllocation, setEditingAllocation] = useState<CreditCardPaymentAllocation | null>(null)
+  const [allocationPaymentId, setAllocationPaymentId] = useState('')
+  const [allocationDomainId, setAllocationDomainId] = useState('')
+  const [allocationAmount, setAllocationAmount] = useState('')
+  const [allocationNotes, setAllocationNotes] = useState('')
+  const [expandedFundingLines, setExpandedFundingLines] = useState<Set<string>>(new Set())
+  const [selectedStatementTxIds, setSelectedStatementTxIds] = useState<Set<string>>(new Set())
+  const [bulkFundingDomainId, setBulkFundingDomainId] = useState('')
   const [filterFrom, setFilterFrom] = useState(defaultFrom)
   const [filterTo, setFilterTo] = useState(defaultTo)
   const [showPrimary, setShowPrimary] = useState(false)
@@ -346,6 +351,14 @@ export default function AccountDetailPage() {
     if (!billsAsc.length) return null
     return billsAsc.find(b => b.due_date === filterTo) ?? null
   }, [billsAsc, filterTo])
+  // Funding allocations must target the statement being viewed, even when the
+  // visible range ends at the statement close date instead of the payment due date.
+  const targetStatementBill = useMemo(() => {
+    if (!account || account.type !== 'credit_card' || !billsAsc.length) return activeBill
+    if (activeBill) return activeBill
+    const dueDate = dueDateForCycle(filterTo, account.payment_due_day)
+    return dueDate ? billsAsc.find(b => b.due_date === dueDate) ?? null : null
+  }, [account, activeBill, billsAsc, filterTo])
   // True when the user is on the trailing in-progress cycle (CC has bills,
   // but the current view doesn't match any of them). Backend uses this to
   // exclude already-billed txs from the cycle window so they don't double-
@@ -415,6 +428,42 @@ export default function AccountDetailPage() {
       isInProgressCycle || undefined,
     ),
     enabled: !!id,
+  })
+
+  const { data: statementFunding, isLoading: statementFundingLoading } = useQuery({
+    queryKey: targetStatementBill
+      ? ['accounts', id, 'statement-funding', { bill_id: targetStatementBill.id, from: filterFrom, to: filterTo }]
+      : ['accounts', id, 'statement-funding', filterFrom, filterTo],
+    queryFn: () => accounts.statementFunding(
+      id!,
+      targetStatementBill
+        ? { bill_id: targetStatementBill.id, from: filterFrom, to: filterTo }
+        : { from: filterFrom, to: filterTo },
+    ),
+    enabled: !!id && account?.type === 'credit_card',
+  })
+
+  const statementFundingParams = targetStatementBill
+    ? { bill_id: targetStatementBill.id, from: filterFrom, to: filterTo }
+    : { from: filterFrom, to: filterTo }
+  const targetStatementDueDate = targetStatementBill?.due_date
+    ?? (account?.type === 'credit_card' ? dueDateForCycle(filterTo, account.payment_due_day) : null)
+  const paymentCandidateTo = targetStatementDueDate
+    ?? filterTo
+
+  const { data: paymentAllocationsList } = useQuery({
+    queryKey: ['accounts', id, 'payment-allocations', statementFundingParams],
+    queryFn: () => accounts.paymentAllocations(id!, statementFundingParams),
+    enabled: !!id && account?.type === 'credit_card',
+  })
+
+  const { data: paymentCandidateData } = useQuery({
+    queryKey: ['accounts', id, 'payment-candidates', { from: filterFrom, to: paymentCandidateTo }],
+    queryFn: () => accounts.paymentCandidates(id!, {
+      from: filterFrom || undefined,
+      to: paymentCandidateTo || undefined,
+    }),
+    enabled: !!id && account?.type === 'credit_card',
   })
 
   // Previous cycle (for the Total da fatura comparison subtitle).
@@ -523,6 +572,12 @@ export default function AccountDetailPage() {
     queryFn: categoriesApi.list,
   })
 
+  const { data: fundingDomainsList } = useQuery({
+    queryKey: ['funding-domains'],
+    queryFn: () => fundingDomainsApi.list(),
+    enabled: account?.type === 'credit_card',
+  })
+
   const updateMutation = useMutation({
     mutationFn: ({ id: txId, ...data }: Partial<Transaction> & { id: string }) =>
       transactions.update(txId, data),
@@ -604,11 +659,87 @@ export default function AccountDetailPage() {
     },
   })
 
+  const resetAllocationForm = () => {
+    setEditingAllocation(null)
+    setAllocationPaymentId('')
+    setAllocationDomainId('')
+    setAllocationAmount('')
+    setAllocationNotes('')
+  }
+
+  const invalidateStatementFunding = () => {
+    queryClient.invalidateQueries({ queryKey: ['accounts', id, 'statement-funding'] })
+    queryClient.invalidateQueries({ queryKey: ['accounts', id, 'payment-allocations'] })
+    queryClient.invalidateQueries({ queryKey: ['accounts', id, 'payment-candidates'] })
+    queryClient.invalidateQueries({ queryKey: ['transactions'] })
+    queryClient.invalidateQueries({ queryKey: ['accounts', id, 'summary'] })
+  }
+
+  const createAllocationMutation = useMutation({
+    mutationFn: () => accounts.createPaymentAllocation(id!, {
+      payment_transaction_id: allocationPaymentId,
+      bill_id: targetStatementBill?.id ?? null,
+      statement_due_date: targetStatementDueDate,
+      funding_domain_id: allocationDomainId,
+      amount: Number(allocationAmount),
+      notes: allocationNotes.trim() || null,
+    }),
+    onSuccess: () => {
+      invalidateStatementFunding()
+      resetAllocationForm()
+      toast.success(t('accounts.paymentAllocationSaved'))
+    },
+    onError: (error) => toast.error(extractApiError(error)),
+  })
+
+  const updateAllocationMutation = useMutation({
+    mutationFn: () => accounts.updatePaymentAllocation(id!, editingAllocation!.id, {
+      bill_id: targetStatementBill?.id ?? null,
+      statement_due_date: targetStatementDueDate,
+      funding_domain_id: allocationDomainId,
+      amount: Number(allocationAmount),
+      notes: allocationNotes.trim() || null,
+    }),
+    onSuccess: () => {
+      invalidateStatementFunding()
+      resetAllocationForm()
+      toast.success(t('accounts.paymentAllocationSaved'))
+    },
+    onError: (error) => toast.error(extractApiError(error)),
+  })
+
+  const deleteAllocationMutation = useMutation({
+    mutationFn: (allocationId: string) => accounts.deletePaymentAllocation(id!, allocationId),
+    onSuccess: () => {
+      invalidateStatementFunding()
+      resetAllocationForm()
+      toast.success(t('accounts.paymentAllocationDeleted'))
+    },
+    onError: (error) => toast.error(extractApiError(error)),
+  })
+
+  const bulkFundingDomainMutation = useMutation({
+    mutationFn: () => transactions.bulkFundingDomain(
+      Array.from(selectedStatementTxIds).filter((txId) => assignableStatementTxIds.has(txId)),
+      bulkFundingDomainId || null,
+    ),
+    onSuccess: ({ updated }) => {
+      invalidateFinancialQueries(queryClient)
+      setSelectedStatementTxIds(new Set())
+      toast.success(t('accounts.bulkFundingDomainUpdated', { count: updated }))
+    },
+    onError: (error) => toast.error(extractApiError(error)),
+  })
+
   // Whether to use primary currency amounts (for foreign-currency accounts with toggle, or domestic accounts with foreign txs)
   const isCreditCard = account?.type === 'credit_card'
   const isForeignCurrency = account ? account.currency !== userCurrency : false
   const usePrimary = !isForeignCurrency || showPrimary
   const displayCurrency = (isForeignCurrency && !showPrimary) ? (account?.currency || userCurrency) : userCurrency
+  const fundingDomains = fundingDomainsList ?? []
+  const paymentAllocations = paymentAllocationsList ?? []
+  const paymentCandidates = paymentCandidateData ?? []
+  const allocationLoading = createAllocationMutation.isPending || updateAllocationMutation.isPending
 
   // Chart data:
   // - Non-CC: daily running balance from /balance-history
@@ -716,6 +847,12 @@ export default function AccountDetailPage() {
     ? defaultCycleForCreditCard(account.statement_close_day, account.payment_due_day, new Date())
     : { start: defaultFrom(), end: defaultTo() }
   const hasFilters = filterFrom !== resolvedDefaultRange.start || filterTo !== resolvedDefaultRange.end
+  const assignableStatementTxs = txWithRunningBalance.filter((tx) =>
+    isCreditCard && tx.type === 'debit' && tx.source !== 'opening_balance' && !tx.transfer_pair_id
+  )
+  const assignableStatementTxIds = new Set(assignableStatementTxs.map((tx) => tx.id))
+  const selectedAssignableCount = Array.from(selectedStatementTxIds).filter((txId) => assignableStatementTxIds.has(txId)).length
+  const allAssignableSelected = assignableStatementTxs.length > 0 && selectedAssignableCount === assignableStatementTxs.length
 
   const isLoading = accountLoading || summaryLoading
 
@@ -1231,6 +1368,176 @@ export default function AccountDetailPage() {
         )
       })()}
 
+      {isCreditCard && (
+        <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden mb-6">
+          <div className="px-4 sm:px-5 py-4 border-b border-border flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+            <div>
+              <p className="text-base font-bold text-foreground">{t('accounts.statementFunding')}</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t('accounts.statementFundingHint')}
+              </p>
+            </div>
+            {statementFunding && (
+              <div className="text-right">
+                <p className="text-xs text-muted-foreground">{t('accounts.remaining')}</p>
+                <p className={cn(
+                  'text-sm font-bold tabular-nums',
+                  statementFunding.remaining_amount > 0 ? 'text-rose-500' : 'text-emerald-600',
+                )}>
+                  {mask(formatCurrency(statementFunding.remaining_amount, account.currency, locale))}
+                </p>
+              </div>
+            )}
+          </div>
+          {statementFundingLoading ? (
+            <div className="p-5 space-y-3">
+              {Array.from({ length: 3 }).map((_, index) => (
+                <Skeleton key={index} className="h-16 w-full" />
+              ))}
+            </div>
+          ) : !statementFunding || statementFunding.lines.length === 0 ? (
+            <p className="text-sm text-muted-foreground text-center py-8">
+              {t('accounts.noStatementFunding')}
+            </p>
+          ) : (
+            <div className="divide-y divide-border">
+              {statementFunding.lines
+                .slice()
+                .sort((a, b) => b.remaining_amount - a.remaining_amount)
+                .map((line) => {
+                  const lineKey = line.funding_domain_id ?? 'unassigned'
+                  const domain = line.funding_domain
+                  const expected = Number(line.expected_amount)
+                  const allocated = Number(line.allocated_amount)
+                  const remaining = Number(line.remaining_amount)
+                  const pct = expected > 0 ? Math.min(100, Math.max(0, (allocated / expected) * 100)) : 0
+                  const expanded = expandedFundingLines.has(lineKey)
+                  const visibleTransactions = expanded ? line.transactions : line.transactions.slice(0, 4)
+                  return (
+                    <div key={lineKey} className="px-4 sm:px-5 py-4">
+                      <div className="flex items-start gap-3">
+                        {domain ? (
+                          <CategoryIcon icon={domain.icon} color={domain.color} size="md" />
+                        ) : (
+                          <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold text-muted-foreground">
+                            ?
+                          </div>
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-foreground truncate">
+                                {domain?.name ?? t('accounts.unassignedFundingDomain')}
+                              </p>
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                {t('accounts.transactionCount', { count: line.transactions.length })}
+                              </p>
+                            </div>
+                            <div className="grid grid-cols-3 gap-3 sm:gap-5 text-right shrink-0">
+                              <div>
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{t('accounts.expected')}</p>
+                                <p className="text-xs sm:text-sm font-semibold tabular-nums">{mask(formatCurrency(expected, account.currency, locale))}</p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{t('accounts.allocated')}</p>
+                                <p className="text-xs sm:text-sm font-semibold tabular-nums text-emerald-600">{mask(formatCurrency(allocated, account.currency, locale))}</p>
+                              </div>
+                              <div>
+                                <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-semibold">{t('accounts.remaining')}</p>
+                                <p className={cn('text-xs sm:text-sm font-semibold tabular-nums', remaining > 0 ? 'text-rose-500' : 'text-emerald-600')}>
+                                  {mask(formatCurrency(remaining, account.currency, locale))}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="mt-3 h-2 bg-muted/60 rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full bg-emerald-500 transition-all"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          {line.transactions.length > 0 && (
+                            <div className="mt-3 flex flex-wrap gap-1.5">
+                              {visibleTransactions.map((tx) => (
+                                <span key={tx.id} className="inline-flex items-center rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground max-w-full">
+                                  <span className="truncate max-w-[160px]">{tx.description}</span>
+                                  <span className="ml-1.5 font-semibold tabular-nums text-foreground">
+                                    {mask(formatCurrency(Number(tx.amount), account.currency, locale))}
+                                  </span>
+                                </span>
+                              ))}
+                              {line.transactions.length > 4 && (
+                                <button
+                                  type="button"
+                                  className="inline-flex items-center rounded-md bg-muted px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
+                                  onClick={() => {
+                                    setExpandedFundingLines((prev) => {
+                                      const next = new Set(prev)
+                                      if (next.has(lineKey)) {
+                                        next.delete(lineKey)
+                                      } else {
+                                        next.add(lineKey)
+                                      }
+                                      return next
+                                    })
+                                  }}
+                                >
+                                  {expanded
+                                    ? t('common.showLess')
+                                    : t('common.showMore', { count: line.transactions.length - 4 })}
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+            </div>
+          )}
+          <StatementFundingAllocationPanel
+            accountCurrency={account.currency}
+            locale={locale}
+            activeBillId={targetStatementBill?.id ?? null}
+            fundingDomains={fundingDomains}
+            paymentCandidates={paymentCandidates}
+            paymentAllocations={paymentAllocations}
+            editingAllocation={editingAllocation}
+            allocationPaymentId={allocationPaymentId}
+            allocationDomainId={allocationDomainId}
+            allocationAmount={allocationAmount}
+            allocationNotes={allocationNotes}
+            onPaymentChange={(paymentId) => {
+              setAllocationPaymentId(paymentId)
+              const payment = paymentCandidates.find((candidate) => candidate.payment_transaction_id === paymentId)
+              setAllocationAmount(payment ? String(payment.remaining_amount) : '')
+            }}
+            onDomainChange={setAllocationDomainId}
+            onAmountChange={setAllocationAmount}
+            onNotesChange={setAllocationNotes}
+            onEdit={(allocation) => {
+              setEditingAllocation(allocation)
+              setAllocationPaymentId('')
+              setAllocationDomainId(allocation.funding_domain_id)
+              setAllocationAmount(String(allocation.amount))
+              setAllocationNotes(allocation.notes ?? '')
+            }}
+            onCancelEdit={resetAllocationForm}
+            onSubmit={() => {
+              if (editingAllocation) {
+                updateAllocationMutation.mutate()
+              } else {
+                createAllocationMutation.mutate()
+              }
+            }}
+            onDelete={(allocationId) => deleteAllocationMutation.mutate(allocationId)}
+            loading={allocationLoading}
+            deleteLoading={deleteAllocationMutation.isPending}
+          />
+        </div>
+      )}
+
       {/* Balance / Cycle spending chart */}
       {(() => {
         const cycleEmpty = isCreditCard && chartData.length > 0 && chartData[chartData.length - 1].balance === 0
@@ -1321,8 +1628,32 @@ export default function AccountDetailPage() {
 
       {/* Transaction table */}
       <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
-        <div className="px-5 py-4 border-b border-border">
+        <div className="px-5 py-4 border-b border-border flex flex-col gap-3">
           <p className="font-semibold text-foreground">{t('transactions.title')}</p>
+          {isCreditCard && selectedAssignableCount > 0 && (
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <span className="text-xs text-muted-foreground">
+                {t('transactions.selected', { count: selectedAssignableCount })}: {selectedAssignableCount}
+              </span>
+              <select
+                className="w-full sm:w-64 border border-border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
+                value={bulkFundingDomainId}
+                onChange={(event) => setBulkFundingDomainId(event.target.value)}
+              >
+                <option value="">{t('transactions.noFundingDomain')}</option>
+                {fundingDomains.map((domain) => (
+                  <option key={domain.id} value={domain.id}>{domain.name}</option>
+                ))}
+              </select>
+              <Button
+                size="sm"
+                onClick={() => bulkFundingDomainMutation.mutate()}
+                disabled={bulkFundingDomainMutation.isPending}
+              >
+                {t('accounts.applyFundingDomain')}
+              </Button>
+            </div>
+          )}
         </div>
         <div className="p-0">
           {txLoading ? (
@@ -1336,9 +1667,33 @@ export default function AccountDetailPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
+                    {isCreditCard && (
+                      <th className="px-3 py-3 text-left font-medium w-10">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-border"
+                          checked={allAssignableSelected}
+                          onChange={(event) => {
+                            setSelectedStatementTxIds((prev) => {
+                              const next = new Set(prev)
+                              if (event.target.checked) {
+                                assignableStatementTxs.forEach((tx) => next.add(tx.id))
+                              } else {
+                                assignableStatementTxs.forEach((tx) => next.delete(tx.id))
+                              }
+                              return next
+                            })
+                          }}
+                          aria-label={t('accounts.selectStatementTransactions')}
+                        />
+                      </th>
+                    )}
                     <th className="px-3 sm:px-4 py-3 text-left font-medium">{t('transactions.date')}</th>
                     <th className="px-3 sm:px-4 py-3 text-left font-medium">{t('transactions.description')}</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">{t('transactions.category')}</th>
+                    {isCreditCard && (
+                      <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">{t('transactions.fundingDomain')}</th>
+                    )}
                     <th className="px-3 sm:px-4 py-3 text-right font-medium">{t('transactions.amount')}</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">{t('accounts.runningBalance')}</th>
                   </tr>
@@ -1348,6 +1703,7 @@ export default function AccountDetailPage() {
                     const isOpening = tx.source === 'opening_balance'
                     const isTransfer = !!tx.transfer_pair_id
                     const isPending = tx.status === 'pending'
+                    const isAssignable = assignableStatementTxIds.has(tx.id)
                     return (
                       <tr
                         key={tx.id}
@@ -1359,6 +1715,30 @@ export default function AccountDetailPage() {
                           }
                         }}
                       >
+                        {isCreditCard && (
+                          <td className="px-3 py-3">
+                            {isAssignable ? (
+                              <input
+                                type="checkbox"
+                                className="h-4 w-4 rounded border-border"
+                                checked={selectedStatementTxIds.has(tx.id)}
+                                onClick={(event) => event.stopPropagation()}
+                                onChange={(event) => {
+                                  setSelectedStatementTxIds((prev) => {
+                                    const next = new Set(prev)
+                                    if (event.target.checked) {
+                                      next.add(tx.id)
+                                    } else {
+                                      next.delete(tx.id)
+                                    }
+                                    return next
+                                  })
+                                }}
+                                aria-label={tx.description}
+                              />
+                            ) : null}
+                          </td>
+                        )}
                         <td className="px-3 sm:px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
                           {formatDateStr(tx.date, locale)}
                         </td>
@@ -1411,6 +1791,18 @@ export default function AccountDetailPage() {
                             <span className="text-muted-foreground">—</span>
                           )}
                         </td>
+                        {isCreditCard && (
+                          <td className="px-4 py-3 hidden lg:table-cell">
+                            {tx.funding_domain ? (
+                              <span className="flex items-center gap-1.5">
+                                <CategoryIcon icon={tx.funding_domain.icon} color={tx.funding_domain.color} size="sm" />
+                                <span className="text-sm text-muted-foreground">{tx.funding_domain.name}</span>
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
+                          </td>
+                        )}
                         <td className={`px-3 sm:px-4 py-3 text-right text-xs sm:text-sm font-semibold tabular-nums ${tx.type === 'credit' ? 'text-emerald-600' : 'text-rose-500'}`}>
                           {mask(`${tx.type === 'credit' ? '+' : '-'}${formatCurrency(Math.abs(Number(tx.amount)), tx.currency, locale)}`)}
                           {tx.currency !== userCurrency && tx.amount_primary != null && (
@@ -1467,6 +1859,189 @@ export default function AccountDetailPage() {
           onSave={(data) => ccSettingsMutation.mutate(data)}
           loading={ccSettingsMutation.isPending}
         />
+      )}
+    </div>
+  )
+}
+
+function StatementFundingAllocationPanel({
+  accountCurrency,
+  locale,
+  activeBillId,
+  fundingDomains,
+  paymentCandidates,
+  paymentAllocations,
+  editingAllocation,
+  allocationPaymentId,
+  allocationDomainId,
+  allocationAmount,
+  allocationNotes,
+  onPaymentChange,
+  onDomainChange,
+  onAmountChange,
+  onNotesChange,
+  onEdit,
+  onCancelEdit,
+  onSubmit,
+  onDelete,
+  loading,
+  deleteLoading,
+}: {
+  accountCurrency: string
+  locale: string
+  activeBillId: string | null
+  fundingDomains: FundingDomain[]
+  paymentCandidates: CreditCardPaymentCandidate[]
+  paymentAllocations: CreditCardPaymentAllocation[]
+  editingAllocation: CreditCardPaymentAllocation | null
+  allocationPaymentId: string
+  allocationDomainId: string
+  allocationAmount: string
+  allocationNotes: string
+  onPaymentChange: (value: string) => void
+  onDomainChange: (value: string) => void
+  onAmountChange: (value: string) => void
+  onNotesChange: (value: string) => void
+  onEdit: (allocation: CreditCardPaymentAllocation) => void
+  onCancelEdit: () => void
+  onSubmit: () => void
+  onDelete: (allocationId: string) => void
+  loading: boolean
+  deleteLoading: boolean
+}) {
+  const { t } = useTranslation()
+  const { mask } = usePrivacyMode()
+  const canSubmit = editingAllocation
+    ? allocationDomainId && Number(allocationAmount) > 0
+    : allocationPaymentId && allocationDomainId && Number(allocationAmount) > 0
+  const domainNameById = new Map(fundingDomains.map((domain) => [domain.id, domain.name]))
+
+  return (
+    <div className="border-t border-border bg-muted/20 px-4 sm:px-5 py-4 space-y-4">
+      <div>
+        <p className="text-sm font-semibold text-foreground">{t('accounts.paymentAllocations')}</p>
+        <p className="text-xs text-muted-foreground mt-0.5">{t('accounts.paymentAllocationsHint')}</p>
+      </div>
+
+      {paymentAllocations.length > 0 && (
+        <div className="space-y-2">
+          {paymentAllocations.map((allocation) => (
+            <div key={allocation.id} className="flex items-center gap-3 rounded-lg border border-border bg-card px-3 py-2">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground truncate">
+                  {allocation.funding_domain?.name ?? domainNameById.get(allocation.funding_domain_id) ?? t('transactions.fundingDomain')}
+                </p>
+                {allocation.notes && (
+                  <p className="text-xs text-muted-foreground truncate">{allocation.notes}</p>
+                )}
+              </div>
+              <p className="text-sm font-semibold tabular-nums text-emerald-600">
+                {mask(formatCurrency(Number(allocation.amount), accountCurrency, locale))}
+              </p>
+              <button
+                type="button"
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                onClick={() => onEdit(allocation)}
+                title={t('common.edit')}
+              >
+                <Pencil size={13} />
+              </button>
+              <button
+                type="button"
+                className="p-1.5 rounded-md text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                onClick={() => onDelete(allocation.id)}
+                disabled={deleteLoading}
+                title={t('common.delete')}
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <form
+        className="grid gap-3 lg:grid-cols-[1.2fr_1fr_0.7fr_1fr_auto]"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (canSubmit) onSubmit()
+        }}
+      >
+        {!editingAllocation ? (
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t('accounts.paymentTransaction')}</Label>
+            <select
+              className="w-full border border-border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
+              value={allocationPaymentId}
+              onChange={(event) => onPaymentChange(event.target.value)}
+              required
+            >
+              <option value="">{t('accounts.selectPayment')}</option>
+              {paymentCandidates.map((tx) => (
+                <option key={tx.payment_transaction_id} value={tx.payment_transaction_id}>
+                  {formatDateStr(tx.date, locale)} · {tx.description} · {formatCurrency(Number(tx.remaining_amount), tx.currency, locale)}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            <Label className="text-xs">{t('accounts.paymentTransaction')}</Label>
+            <div className="h-9 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+              {t('accounts.editingAllocation')}
+            </div>
+          </div>
+        )}
+        <div className="space-y-1.5">
+          <Label className="text-xs">{t('transactions.fundingDomain')}</Label>
+          <select
+            className="w-full border border-border rounded-md px-3 py-2 text-sm bg-background focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
+            value={allocationDomainId}
+            onChange={(event) => onDomainChange(event.target.value)}
+            required
+          >
+            <option value="">{t('rules.selectFundingDomain')}</option>
+            {fundingDomains.map((domain) => (
+              <option key={domain.id} value={domain.id}>{domain.name}</option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">{t('transactions.amount')}</Label>
+          <Input
+            type="number"
+            step="0.01"
+            min="0.01"
+            value={allocationAmount}
+            onChange={(event) => onAmountChange(event.target.value)}
+            required
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs">{t('transactions.notes')}</Label>
+          <Input
+            value={allocationNotes}
+            onChange={(event) => onNotesChange(event.target.value)}
+            placeholder={t('transactions.notesHint')}
+          />
+        </div>
+        <div className="flex items-end gap-2">
+          {editingAllocation && (
+            <Button type="button" variant="outline" size="sm" onClick={onCancelEdit}>
+              {t('common.cancel')}
+            </Button>
+          )}
+          <Button type="submit" size="sm" disabled={!canSubmit || loading}>
+            {editingAllocation ? t('common.save') : t('accounts.addAllocation')}
+          </Button>
+        </div>
+      </form>
+
+      {!editingAllocation && paymentCandidates.length === 0 && (
+        <p className="text-xs text-muted-foreground">{t('accounts.noPaymentCandidates')}</p>
+      )}
+      {!activeBillId && (
+        <p className="text-xs text-muted-foreground">{t('accounts.unbilledAllocationHint')}</p>
       )}
     </div>
   )

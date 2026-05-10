@@ -124,6 +124,63 @@ async def test_generate_pending_creates_transactions(client, auth_headers, test_
 
 
 @pytest.mark.asyncio
+async def test_recurring_credit_card_transaction_carries_funding_domain(client, auth_headers):
+    """Generated credit-card recurring transactions inherit the recurring funding domain."""
+    today = date.today().isoformat()
+    cc_account = (
+        await client.post(
+            "/api/accounts",
+            json={
+                "name": "Main CC",
+                "type": "credit_card",
+                "balance": "0",
+                "currency": "BRL",
+                "statement_close_day": 15,
+                "payment_due_day": 19,
+            },
+            headers=auth_headers,
+        )
+    ).json()
+    domain = (
+        await client.post(
+            "/api/funding-domains",
+            json={"name": "Apartamento", "icon": "home", "color": "#8B5CF6"},
+            headers=auth_headers,
+        )
+    ).json()
+    recurring_response = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": "Recurring CC purchase",
+            "amount": 123.45,
+            "currency": "BRL",
+            "type": "debit",
+            "frequency": "monthly",
+            "start_date": today,
+            "account_id": cc_account["id"],
+            "funding_domain_id": domain["id"],
+        },
+        headers=auth_headers,
+    )
+    assert recurring_response.status_code == 201, recurring_response.text
+    assert recurring_response.json()["funding_domain_id"] == domain["id"]
+
+    generate_response = await client.post("/api/recurring-transactions/generate", headers=auth_headers)
+    assert generate_response.status_code == 200, generate_response.text
+    assert generate_response.json()["generated"] == 1
+
+    tx_response = await client.get(
+        "/api/transactions",
+        params={"account_id": cc_account["id"], "from": today, "to": today},
+        headers=auth_headers,
+    )
+    assert tx_response.status_code == 200, tx_response.text
+    txs = tx_response.json()["items"]
+    assert len(txs) == 1
+    assert txs[0]["funding_domain_id"] == domain["id"]
+
+
+@pytest.mark.asyncio
 async def test_generate_no_duplicate_with_skip_first(client, auth_headers, test_categories, test_account):
     """When created with skip_first, generate doesn't create duplicate for start_date."""
     # Use relative dates so the test doesn't go stale over time

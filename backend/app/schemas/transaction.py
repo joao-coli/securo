@@ -6,6 +6,7 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict
 
 from app.schemas.category import CategoryRead
+from app.schemas.funding_domain import FundingDomainRead
 from app.schemas.transaction_split import (
     TransactionSplitRead,
     TransactionSplitsInput,
@@ -26,6 +27,7 @@ class TransactionBase(BaseModel):
 class TransactionCreate(TransactionBase):
     account_id: uuid.UUID
     category_id: Optional[uuid.UUID] = None
+    funding_domain_id: Optional[uuid.UUID] = None
     payee_id: Optional[uuid.UUID] = None
     currency: Optional[str] = None
     notes: Optional[str] = None
@@ -43,6 +45,7 @@ class TransactionUpdate(BaseModel):
     currency: Optional[str] = None
     account_id: Optional[uuid.UUID] = None
     category_id: Optional[uuid.UUID] = None
+    funding_domain_id: Optional[uuid.UUID] = None
     payee_id: Optional[uuid.UUID] = None
     notes: Optional[str] = None
     amount_primary: Optional[Decimal] = None
@@ -62,6 +65,8 @@ class TransactionRead(TransactionBase):
     account_id: Optional[uuid.UUID] = None
     category_id: Optional[uuid.UUID] = None
     category: Optional[CategoryRead] = None
+    funding_domain_id: Optional[uuid.UUID] = None
+    funding_domain: Optional[FundingDomainRead] = None
     currency: str = "USD"
     source: str
     status: str = "posted"
@@ -101,6 +106,11 @@ class BulkCategorizeRequest(BaseModel):
     category_id: Optional[uuid.UUID] = None
 
 
+class BulkFundingDomainRequest(BaseModel):
+    transaction_ids: list[uuid.UUID]
+    funding_domain_id: Optional[uuid.UUID] = None
+
+
 class TransferCreate(BaseModel):
     from_account_id: uuid.UUID
     to_account_id: uuid.UUID
@@ -128,6 +138,7 @@ class TransferRead(BaseModel):
 
 class TransactionImport(TransactionBase):
     """TransactionBase extended with import-only fields not exposed in read responses."""
+
     category_name: Optional[str] = None
 
 

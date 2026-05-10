@@ -13,6 +13,7 @@ from app.models.transaction import Transaction
 from app.schemas.recurring_transaction import RecurringTransactionCreate, RecurringTransactionUpdate
 from app.services.credit_card_service import apply_effective_date
 from app.services.fx_rate_service import stamp_primary_amount
+from app.services.funding_domain_service import get_assignable_funding_domain
 
 
 async def _verify_account_owned(
@@ -59,6 +60,8 @@ async def create_recurring_transaction(
     session: AsyncSession, user_id: uuid.UUID, data: RecurringTransactionCreate
 ) -> RecurringTransaction:
     await _verify_account_owned(session, user_id, data.account_id)
+    if data.funding_domain_id is not None:
+        await get_assignable_funding_domain(session, data.funding_domain_id, user_id)
     next_occ = data.start_date
     if data.skip_first:
         next_occ = _advance_date(
@@ -69,6 +72,7 @@ async def create_recurring_transaction(
         user_id=user_id,
         account_id=data.account_id,
         category_id=data.category_id,
+        funding_domain_id=data.funding_domain_id,
         description=data.description,
         amount=data.amount,
         currency=data.currency,
@@ -107,6 +111,8 @@ async def update_recurring_transaction(
             raise ValueError("account_id is required")
         if new_account_id != recurring.account_id:
             await _verify_account_owned(session, user_id, new_account_id)
+    if update_data.get("funding_domain_id") is not None:
+        await get_assignable_funding_domain(session, update_data["funding_domain_id"], user_id)
 
     for key, value in update_data.items():
         setattr(recurring, key, value)
@@ -217,6 +223,7 @@ async def generate_pending(
                 user_id=user_id,
                 account_id=recurring.account_id,
                 category_id=recurring.category_id,
+                funding_domain_id=recurring.funding_domain_id,
                 description=recurring.description,
                 amount=recurring.amount,
                 currency=recurring.currency,

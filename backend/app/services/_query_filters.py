@@ -6,13 +6,57 @@ signal) only need to be made here.
 """
 import uuid
 from datetime import date
-from typing import Optional
+from typing import Optional, cast
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, not_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.elements import ColumnElement
 
+from app.models.credit_card_bill import CreditCardBill
 from app.models.category import Category
 from app.models.transaction import Transaction
+
+
+def credit_card_bill_bucket_date() -> ColumnElement[date]:
+    """Date expression used for credit-card bill-cycle filtering."""
+    return cast(ColumnElement[date], func.coalesce(Transaction.effective_bill_date, Transaction.date))
+
+
+def credit_card_bill_scope(
+    bill_id: uuid.UUID,
+    *,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    bucket_date: Optional[ColumnElement[date]] = None,
+) -> ColumnElement[bool]:
+    """Filter transactions that belong to a credit-card bill view.
+
+    Includes provider-linked transactions (`bill_id`) and unlinked manual/imported
+    transactions whose bill bucket date falls inside the statement window. Pending
+    synced transactions are deferred unless cycle math already placed them in this bill.
+    """
+    bucket = bucket_date if bucket_date is not None else credit_card_bill_bucket_date()
+    predicates: list[ColumnElement[bool]] = [Transaction.bill_id == bill_id]
+    if date_from is not None or date_to is not None:
+        active_due_subq = (
+            select(CreditCardBill.due_date)
+            .where(CreditCardBill.id == bill_id)
+            .scalar_subquery()
+        )
+        unlinked_clauses: list[ColumnElement[bool]] = [
+            Transaction.bill_id.is_(None),
+            not_(and_(
+                Transaction.source == "sync",
+                Transaction.status == "pending",
+                Transaction.effective_date != active_due_subq,
+            )),
+        ]
+        if date_from is not None:
+            unlinked_clauses.append(bucket >= date_from)
+        if date_to is not None:
+            unlinked_clauses.append(bucket <= date_to)
+        predicates.append(and_(*unlinked_clauses))
+    return or_(*predicates)
 
 
 def counts_as_pnl():

@@ -282,6 +282,7 @@ export default function TransactionsPage() {
           start_date: payload.tx.date,
           end_date: payload.recurringData.end_date || undefined,
           category_id: payload.tx.category_id || undefined,
+          funding_domain_id: payload.tx.funding_domain_id || undefined,
           account_id: payload.tx.account_id || undefined,
           skip_first: true,
         } as Record<string, unknown>)

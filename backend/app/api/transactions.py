@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import current_active_user
 from app.core.database import get_async_session
 from app.models.user import User
-from app.schemas.transaction import BulkCategorizeRequest, BulkTagsRequest, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
+from app.schemas.transaction import BulkCategorizeRequest, BulkFundingDomainRequest, BulkTagsRequest, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
 from app.services import transaction_service
 from app.services.admin_service import get_credit_card_accounting_mode
 
@@ -154,6 +154,21 @@ async def bulk_categorize(
     count = await transaction_service.bulk_update_category(
         session, user.id, data.transaction_ids, data.category_id
     )
+    return {"updated": count}
+
+
+@router.patch("/bulk-funding-domain")
+async def bulk_funding_domain(
+    data: BulkFundingDomainRequest,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    try:
+        count = await transaction_service.bulk_update_funding_domain(
+            session, user.id, data.transaction_ids, data.funding_domain_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return {"updated": count}
 
 

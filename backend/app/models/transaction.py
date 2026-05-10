@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from app.models.account import Account
     from app.models.category import Category
     from app.models.credit_card_bill import CreditCardBill
+    from app.models.funding_domain import FundingDomain
     from app.models.import_log import ImportLog
     from app.models.payee import Payee
     from app.models.transaction_attachment import TransactionAttachment
@@ -26,6 +27,12 @@ class Transaction(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     account_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("accounts.id"), nullable=False)
     category_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("categories.id"), nullable=True)
+    funding_domain_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("funding_domains.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     external_id: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)  # Provider's transaction ID
     description: Mapped[str] = mapped_column(String(500))
     amount: Mapped[Decimal] = mapped_column(Numeric(precision=15, scale=2))
@@ -77,6 +84,7 @@ class Transaction(Base):
 
     account: Mapped["Account"] = relationship(back_populates="transactions")
     category: Mapped[Optional["Category"]] = relationship()
+    funding_domain: Mapped[Optional["FundingDomain"]] = relationship(back_populates="transactions")
     bill: Mapped[Optional["CreditCardBill"]] = relationship()
     payee_entity: Mapped[Optional["Payee"]] = relationship(back_populates="transactions")
     import_log: Mapped[Optional["ImportLog"]] = relationship(back_populates="transactions")

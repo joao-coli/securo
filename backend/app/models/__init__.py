@@ -1,6 +1,7 @@
 from app.models.user import User
 from app.models.category import Category
 from app.models.category_group import CategoryGroup
+from app.models.funding_domain import FundingDomain
 from app.models.bank_connection import BankConnection
 from app.models.account import Account
 from app.models.transaction import Transaction
@@ -17,6 +18,7 @@ from app.models.payee import Payee, PayeeMapping
 from app.models.app_settings import AppSetting
 from app.models.goal import Goal
 from app.models.credit_card_bill import CreditCardBill
+from app.models.credit_card_payment_allocation import CreditCardPaymentAllocation
 from app.models.group import Group, GroupMember
 from app.models.transaction_split import TransactionSplit
 from app.models.group_settlement import GroupSettlement
@@ -25,6 +27,7 @@ __all__ = [
     "User",
     "Category",
     "CategoryGroup",
+    "FundingDomain",
     "BankConnection",
     "Account",
     "Transaction",
@@ -42,6 +45,7 @@ __all__ = [
     "AppSetting",
     "Goal",
     "CreditCardBill",
+    "CreditCardPaymentAllocation",
     "Group",
     "GroupMember",
     "TransactionSplit",

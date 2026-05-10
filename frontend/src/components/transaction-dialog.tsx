@@ -3,8 +3,9 @@ import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/contexts/auth-context'
-import { currencies as currenciesApi, transactions as transactionsApi, settings as settingsApi, payees as payeesApi } from '@/lib/api'
+import { currencies as currenciesApi, transactions as transactionsApi, settings as settingsApi, payees as payeesApi, fundingDomains as fundingDomainsApi } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -305,16 +306,31 @@ function TransactionForm({
     queryKey: ['payees'],
     queryFn: payeesApi.list,
   })
+  const { data: fundingDomainsList } = useQuery({
+    queryKey: ['funding-domains'],
+    queryFn: () => fundingDomainsApi.list(),
+  })
   const seed = transaction ?? duplicateDraft
+  const fundingDomains = fundingDomainsList ?? []
+  const fundingDomainOptions = seed?.funding_domain && !fundingDomains.some((domain) => domain.id === seed.funding_domain?.id)
+    ? [...fundingDomains, seed.funding_domain]
+    : fundingDomains
   const [description, setDescription] = useState(seed?.description ?? '')
   const [amount, setAmount] = useState(seed?.amount?.toString() ?? '')
   const [date, setDate] = useState(seed?.date ?? new Date().toISOString().split('T')[0])
   const [type, setType] = useState<'debit' | 'credit'>(seed?.type ?? 'debit')
   const [currency, setCurrency] = useState(seed?.currency ?? userCurrency)
   const [categoryId, setCategoryId] = useState(seed?.category_id ?? '')
+  const [fundingDomainId, setFundingDomainId] = useState(seed?.funding_domain_id ?? '')
   const [payeeId, setPayeeId] = useState(seed?.payee_id ?? '')
   const [accountId, setAccountId] = useState(seed?.account_id ?? accounts[0]?.id ?? '')
   const [notes, setNotes] = useState(seed?.notes ?? '')
+  const selectedAccount = accounts.find(a => a.id === accountId)
+  const isCcSelected = selectedAccount?.type === 'credit_card'
+  const isCcIncome = isCcSelected && type === 'credit'
+  const effectiveFundingDomainId = isCcIncome ? '' : fundingDomainId
+  const initialAccount = accounts.find(a => a.id === seed?.account_id)
+  const wasInitiallyCc = initialAccount?.type === 'credit_card'
   // Manual CC bucketing override (issue #92). Empty = auto. Visible only
   // when the selected account is a credit card.
   const [effectiveBillDate, setEffectiveBillDate] = useState(seed?.effective_bill_date ?? '')
@@ -462,11 +478,14 @@ function TransactionForm({
         // (sent both for synced and manual edits since the user can hand-
         // correct the bucketing on either; null clears the override back to
         // auto bucketing).
-        const selectedAcc = accounts.find(a => a.id === accountId)
-        const isCcSelected = selectedAcc?.type === 'credit_card'
         const overridePayload: Partial<Transaction> = isCcSelected
           ? { effective_bill_date: effectiveBillDate || null }
           : {}
+        const fundingDomainPayload: Partial<Transaction> = isCcSelected
+          ? { funding_domain_id: effectiveFundingDomainId || null }
+          : wasInitiallyCc && seed?.funding_domain_id
+            ? { funding_domain_id: null }
+            : {}
         // Splits ride along on the same payload — the backend treats a
         // missing `splits` field as untouched and a present payload as
         // full replacement. To clear existing splits when the user
@@ -481,6 +500,7 @@ function TransactionForm({
               category_id: categoryId || null,
               payee_id: payeeId || null,
               notes: notes.trim() || null,
+              ...fundingDomainPayload,
               ...overridePayload,
               ...splitsPayload,
             } as Partial<Transaction>
@@ -494,6 +514,7 @@ function TransactionForm({
               payee_id: payeeId || null,
               account_id: accountId || undefined,
               notes: notes.trim() || null,
+              ...fundingDomainPayload,
               ...fxFields,
               ...overridePayload,
               ...splitsPayload,
@@ -509,7 +530,7 @@ function TransactionForm({
         hasPreview && 'mt-4'
       )}
     >
-      <div className="space-y-4 overflow-y-auto flex-1 min-h-0 pb-2">
+      <div className="space-y-4 overflow-y-auto flex-1 min-h-0 pb-2 pr-3 -mr-3 [scrollbar-gutter:stable]">
       {error && (
         <div className="p-3 text-sm text-destructive bg-destructive/10 rounded-md">
           {error}
@@ -664,7 +685,40 @@ function TransactionForm({
           </select>
         </div>
       </div>
-      <div className={cn("grid gap-4", isSynced ? "grid-cols-1" : "grid-cols-2")}>
+      <div className={cn("grid gap-4", isCcSelected ? "grid-cols-2" : "grid-cols-1")}>
+        {isCcSelected && (
+          <div className="space-y-2">
+            <div className="flex items-center gap-1.5">
+              <Label>{t('transactions.fundingDomain')}</Label>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-muted-foreground cursor-default select-none leading-none">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top">
+                  {isCcIncome ? t('transactions.fundingDomainCreditDisabledHint') : t('transactions.fundingDomainHint')}
+                </TooltipContent>
+              </Tooltip>
+            </div>
+            <select
+              className="w-full border border-border rounded-md px-3 py-2 text-sm bg-background disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-ring/30 focus-visible:ring-[2px]"
+              value={effectiveFundingDomainId}
+              onChange={(e) => setFundingDomainId(e.target.value)}
+              disabled={isCcIncome}
+            >
+              <option value="">{t('transactions.noFundingDomain')}</option>
+              {fundingDomainOptions.map((domain) => (
+                <option key={domain.id} value={domain.id}>{domain.name}</option>
+              ))}
+            </select>
+            {isCcIncome && (
+              <p className="text-xs text-muted-foreground">
+                {t('transactions.fundingDomainCreditDisabledHint')}
+              </p>
+            )}
+          </div>
+        )}
         <div className="space-y-2">
           <Label>{t('payees.payee')}</Label>
           <select
@@ -681,6 +735,8 @@ function TransactionForm({
             <p className="text-xs text-muted-foreground">{t('payees.rawPayee')}: {transaction.payee}</p>
           )}
         </div>
+      </div>
+      <div className={cn("grid gap-4", isSynced ? "grid-cols-1" : "grid-cols-2")}>
         {!isSynced && (
           <div className="space-y-2">
             <Label>{t('transactions.account')}</Label>
@@ -719,23 +775,23 @@ function TransactionForm({
         return (
           <div className="space-y-2">
             <Label>
-              {t('transactions.effectiveBillDate', 'Data efetiva da fatura')}{' '}
+              {t('transactions.effectiveBillDate')}{' '}
               <span className="text-muted-foreground font-normal text-xs">
-                ({t('transactions.effectiveBillDateHint', 'manual, sobrescreve o ciclo automático')})
+                ({t('transactions.effectiveBillDateHint')})
               </span>
             </Label>
             <div className="inline-flex items-center gap-1">
               <DatePickerInput
                 value={effectiveBillDate}
                 onChange={setEffectiveBillDate}
-                placeholder={t('transactions.effectiveBillDatePlaceholder', 'Vencimento da fatura (opcional)')}
+                placeholder={t('transactions.effectiveBillDatePlaceholder')}
               />
               {effectiveBillDate && (
                 <button
                   type="button"
                   className="h-9 w-9 inline-flex items-center justify-center rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors shrink-0"
                   onClick={() => setEffectiveBillDate('')}
-                  title={t('transactions.clearOverride', 'Remover sobrescrição')}
+                  title={t('transactions.clearOverride')}
                 >
                   <X className="h-4 w-4" />
                 </button>

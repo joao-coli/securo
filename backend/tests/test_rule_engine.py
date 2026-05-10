@@ -15,6 +15,7 @@ def make_tx(**kwargs) -> types.SimpleNamespace:
         account_id=uuid.uuid4(),
         payee_id=uuid.uuid4(),
         category_id=None,
+        funding_domain_id=None,
         description="UBER TRIP",
         amount=Decimal("25.50"),
         currency="BRL",
@@ -138,6 +139,23 @@ def test_set_category_skips_if_already_set():
     actions2 = [{"op": "set_category", "value": str(cat_id2)}]
     apply_rule_actions(actions2, tx, category_already_set=True)
     assert tx.category_id == cat_id1  # unchanged
+
+
+def test_set_funding_domain():
+    domain_id = uuid.uuid4()
+    actions = [{"op": "set_funding_domain", "value": str(domain_id)}]
+    tx = make_tx()
+    apply_rule_actions(actions, tx, category_already_set=False)
+    assert tx.funding_domain_id == domain_id
+
+
+def test_set_funding_domain_skips_if_already_set():
+    domain_id1 = uuid.uuid4()
+    domain_id2 = uuid.uuid4()
+    actions = [{"op": "set_funding_domain", "value": str(domain_id2)}]
+    tx = make_tx(funding_domain_id=domain_id1)
+    apply_rule_actions(actions, tx, category_already_set=False)
+    assert tx.funding_domain_id == domain_id1
 
 
 def test_append_notes():

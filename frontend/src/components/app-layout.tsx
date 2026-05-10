@@ -56,6 +56,7 @@ import {
   Shield,
   ShieldCheck,
   Download,
+  Wallet,
 } from 'lucide-react'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { ChangePasswordDialog } from '@/components/change-password-dialog'
@@ -87,6 +88,7 @@ const navItems: NavItem[] = [
   { type: 'link', key: 'goals', path: '/goals', icon: Target },
   { type: 'link', key: 'recurring', path: '/recurring', icon: Repeat },
   { type: 'link', key: 'categories', path: '/categories', icon: Tag },
+  { type: 'link', key: 'fundingDomains', path: '/funding-domains', icon: Wallet },
   { type: 'link', key: 'payees', path: '/payees', icon: Users },
   { type: 'link', key: 'splitGroups', path: '/groups', icon: Split },
   { type: 'link', key: 'rules', path: '/rules', icon: SlidersHorizontal },

@@ -75,10 +75,9 @@ def evaluate_conditions(conditions_op: str, conditions: list[dict], tx: "Transac
     """Return True if the transaction matches the rule's conditions."""
     if not conditions:
         return False
-    results = [_match_condition(c, tx) for c in conditions]
     if conditions_op == "or":
-        return any(results)
-    return all(results)  # "and" is default
+        return any(_match_condition(condition, tx) for condition in conditions)
+    return all(_match_condition(condition, tx) for condition in conditions)
 
 
 def apply_rule_actions(
@@ -101,6 +100,12 @@ def apply_rule_actions(
         elif op == "set_payee":
             try:
                 tx.payee_id = uuid.UUID(str(value))
+            except (ValueError, AttributeError):
+                pass
+
+        elif op == "set_funding_domain" and getattr(tx, "funding_domain_id", None) is None:
+            try:
+                tx.funding_domain_id = uuid.UUID(str(value))
             except (ValueError, AttributeError):
                 pass
 

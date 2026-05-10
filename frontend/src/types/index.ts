@@ -58,6 +58,27 @@ export interface CategoryGroup {
   categories: Category[]
 }
 
+export interface FundingDomain {
+  id: string
+  user_id: string
+  name: string
+  icon: string
+  color: string
+  description: string | null
+  is_active: boolean
+  created_at: string
+}
+
+export interface FundingDomainCreate {
+  name: string
+  icon?: string
+  color?: string
+  description?: string | null
+  is_active?: boolean
+}
+
+export type FundingDomainUpdate = Partial<FundingDomainCreate>
+
 export interface BankConnection {
   id: string
   user_id: string
@@ -111,6 +132,77 @@ export interface CreditCardBill {
   minimum_payment: number | null
 }
 
+export interface CreditCardPaymentAllocation {
+  id: string
+  user_id: string
+  payment_transaction_id: string
+  credit_card_account_id: string
+  bill_id: string | null
+  statement_due_date: string | null
+  funding_domain_id: string
+  funding_domain: FundingDomain | null
+  amount: number
+  notes: string | null
+  created_at: string
+}
+
+export interface CreditCardPaymentAllocationCreate {
+  payment_transaction_id: string
+  bill_id?: string | null
+  statement_due_date?: string | null
+  funding_domain_id: string
+  amount: number
+  notes?: string | null
+}
+
+export interface CreditCardPaymentAllocationUpdate {
+  bill_id?: string | null
+  statement_due_date?: string | null
+  funding_domain_id?: string
+  amount?: number
+  notes?: string | null
+}
+
+export interface CreditCardPaymentCandidate {
+  payment_transaction_id: string
+  canonical_payment_transaction_id: string
+  transfer_pair_id: string
+  description: string
+  amount: number
+  allocated_amount: number
+  remaining_amount: number
+  currency: string
+  date: string
+}
+
+export interface StatementFundingTransaction {
+  id: string
+  description: string
+  amount: number
+  date: string
+  funding_domain_id: string | null
+}
+
+export interface StatementFundingLine {
+  funding_domain_id: string | null
+  funding_domain: FundingDomain | null
+  expected_amount: number
+  allocated_amount: number
+  remaining_amount: number
+  transactions: StatementFundingTransaction[]
+}
+
+export interface StatementFundingReport {
+  credit_card_account_id: string
+  bill_id: string | null
+  date_from: string
+  date_to: string
+  expected_amount: number
+  allocated_amount: number
+  remaining_amount: number
+  lines: StatementFundingLine[]
+}
+
 export interface AccountSummary {
   account_id: string
   current_balance: number
@@ -127,6 +219,8 @@ export interface Transaction {
   account_id: string | null
   category_id: string | null
   category: Category | null
+  funding_domain_id: string | null
+  funding_domain: FundingDomain | null
   external_id: string | null
   description: string
   amount: number
@@ -276,8 +370,10 @@ export interface RuleCondition {
   value: string | number
 }
 
+export type RuleActionOp = 'set_category' | 'set_payee' | 'set_funding_domain' | 'append_notes'
+
 export interface RuleAction {
-  op: string
+  op: RuleActionOp
   value: string
 }
 
@@ -310,6 +406,7 @@ export interface RecurringTransaction {
   user_id: string
   account_id: string | null
   category_id: string | null
+  funding_domain_id: string | null
   description: string
   amount: number
   currency: string

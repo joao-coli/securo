@@ -2,7 +2,7 @@ import React, { useState } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { categories as categoriesApi, recurring as recurringApi, accounts as accountsApi, currencies as currenciesApi } from '@/lib/api'
+import { categories as categoriesApi, recurring as recurringApi, accounts as accountsApi, currencies as currenciesApi, fundingDomains as fundingDomainsApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import type { Category, RecurringTransaction } from '@/types'
+import type { Account, Category, FundingDomain, RecurringTransaction } from '@/types'
 import { Pencil, Trash2, Plus, RefreshCw, Info } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/page-header'
@@ -80,6 +80,11 @@ function RecurringTab() {
   const { data: accountsList } = useQuery({
     queryKey: ['accounts'],
     queryFn: () => accountsApi.list(),
+  })
+
+  const { data: fundingDomainsList } = useQuery({
+    queryKey: ['funding-domains'],
+    queryFn: () => fundingDomainsApi.list(),
   })
 
   const createMutation = useMutation({
@@ -234,6 +239,7 @@ function RecurringTab() {
             recurring={editing}
             categories={categoriesList ?? []}
             accounts={accountsList ?? []}
+            fundingDomains={fundingDomainsList ?? []}
             onSave={(data) => {
               if (editing) {
                 updateMutation.mutate({ id: editing.id, ...data })
@@ -254,13 +260,15 @@ function RecurringForm({
   recurring,
   categories,
   accounts,
+  fundingDomains,
   onSave,
   onCancel,
   loading,
 }: {
   recurring: RecurringTransaction | null
   categories: Category[]
-  accounts: { id: string; name: string }[]
+  accounts: Account[]
+  fundingDomains: FundingDomain[]
   onSave: (data: Partial<RecurringTransaction>) => void
   onCancel: () => void
   loading: boolean
@@ -282,8 +290,11 @@ function RecurringForm({
   const [startDate, setStartDate] = useState(recurring?.start_date ?? new Date().toISOString().split('T')[0])
   const [endDate, setEndDate] = useState(recurring?.end_date ?? '')
   const [categoryId, setCategoryId] = useState(recurring?.category_id ?? '')
+  const [fundingDomainId, setFundingDomainId] = useState(recurring?.funding_domain_id ?? '')
   const [accountId, setAccountId] = useState(recurring?.account_id ?? accounts[0]?.id ?? '')
   const [isActive, setIsActive] = useState(recurring?.is_active ?? true)
+  const selectedAccount = accounts.find((account) => account.id === accountId)
+  const canSetFundingDomain = selectedAccount?.type === 'credit_card' && type === 'debit'
 
   const selectClass = 'w-full border border-border rounded-lg px-3 py-2 text-sm bg-card text-foreground focus:outline-none focus:ring-2 focus:ring-primary'
 
@@ -301,6 +312,7 @@ function RecurringForm({
           start_date: startDate,
           end_date: endDate || null,
           category_id: categoryId || null,
+          funding_domain_id: canSetFundingDomain ? (fundingDomainId || null) : null,
           account_id: accountId || null,
           is_active: isActive,
         } as Partial<RecurringTransaction>)
@@ -383,6 +395,27 @@ function RecurringForm({
           </select>
         </div>
       </div>
+      {selectedAccount?.type === 'credit_card' && (
+        <div className="space-y-2">
+          <Label>{t('transactions.fundingDomain')}</Label>
+          <select
+            className={selectClass}
+            value={fundingDomainId}
+            onChange={(e) => setFundingDomainId(e.target.value)}
+            disabled={!canSetFundingDomain}
+          >
+            <option value="">{t('transactions.noFundingDomain')}</option>
+            {fundingDomains.map((domain) => (
+              <option key={domain.id} value={domain.id}>{domain.name}</option>
+            ))}
+          </select>
+          {!canSetFundingDomain && (
+            <p className="text-xs text-muted-foreground">
+              {t('transactions.fundingDomainCreditDisabledHint')}
+            </p>
+          )}
+        </div>
+      )}
       {recurring && (
         <label className="flex items-center gap-2 cursor-pointer">
           <input

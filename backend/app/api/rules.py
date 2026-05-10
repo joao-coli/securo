@@ -8,7 +8,7 @@ from app.core.database import get_async_session
 from app.models.user import User
 from app.schemas.rule import RuleCreate, RuleRead, RuleUpdate
 from app.services import rule_service
-from app.services.rule_service import DuplicateRuleError
+from app.services.rule_service import DuplicateRuleError, InvalidRuleActionError
 
 router = APIRouter(prefix="/api/rules", tags=["rules"])
 
@@ -34,6 +34,8 @@ async def create_rule(
             status_code=status.HTTP_409_CONFLICT,
             detail="A rule with this name already exists",
         )
+    except InvalidRuleActionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 @router.patch("/{rule_id}", response_model=RuleRead)
@@ -50,6 +52,8 @@ async def update_rule(
             status_code=status.HTTP_409_CONFLICT,
             detail="A rule with this name already exists",
         )
+    except InvalidRuleActionError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if not rule:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rule not found")
     return rule

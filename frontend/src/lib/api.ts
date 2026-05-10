@@ -6,11 +6,19 @@ import type {
   AppSetting,
   Category,
   CategoryGroup,
+  FundingDomain,
+  FundingDomainCreate,
+  FundingDomainUpdate,
   BankConnection,
   ConnectionSettings,
   Account,
   AccountSummary,
   CreditCardBill,
+  CreditCardPaymentCandidate,
+  CreditCardPaymentAllocation,
+  CreditCardPaymentAllocationCreate,
+  CreditCardPaymentAllocationUpdate,
+  StatementFundingReport,
   Transaction,
   Payee,
   PayeeSummary,
@@ -160,6 +168,25 @@ export const categoryGroups = {
   },
 }
 
+// Funding Domains
+export const fundingDomains = {
+  list: async (includeInactive = false): Promise<FundingDomain[]> => {
+    const { data } = await api.get('/funding-domains', { params: { include_inactive: includeInactive } })
+    return data
+  },
+  create: async (domain: FundingDomainCreate): Promise<FundingDomain> => {
+    const { data } = await api.post('/funding-domains', domain)
+    return data
+  },
+  update: async (id: string, domain: FundingDomainUpdate): Promise<FundingDomain> => {
+    const { data } = await api.patch(`/funding-domains/${id}`, domain)
+    return data
+  },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/funding-domains/${id}`)
+  },
+}
+
 // Bank Connections
 export const connections = {
   list: async (): Promise<BankConnection[]> => {
@@ -241,6 +268,45 @@ export const accounts = {
     const { data } = await api.get(`/accounts/${id}/bills`, { params: { limit } })
     return data
   },
+  paymentAllocations: async (
+    id: string,
+    params: { bill_id?: string; from?: string; to?: string } = {},
+  ): Promise<CreditCardPaymentAllocation[]> => {
+    const { data } = await api.get(`/accounts/${id}/payment-allocations`, { params })
+    return data
+  },
+  paymentCandidates: async (
+    id: string,
+    params: { from?: string; to?: string } = {},
+  ): Promise<CreditCardPaymentCandidate[]> => {
+    const { data } = await api.get(`/accounts/${id}/payment-candidates`, { params })
+    return data
+  },
+  createPaymentAllocation: async (
+    id: string,
+    allocation: CreditCardPaymentAllocationCreate,
+  ): Promise<CreditCardPaymentAllocation> => {
+    const { data } = await api.post(`/accounts/${id}/payment-allocations`, allocation)
+    return data
+  },
+  updatePaymentAllocation: async (
+    id: string,
+    allocationId: string,
+    allocation: CreditCardPaymentAllocationUpdate,
+  ): Promise<CreditCardPaymentAllocation> => {
+    const { data } = await api.patch(`/accounts/${id}/payment-allocations/${allocationId}`, allocation)
+    return data
+  },
+  deletePaymentAllocation: async (id: string, allocationId: string): Promise<void> => {
+    await api.delete(`/accounts/${id}/payment-allocations/${allocationId}`)
+  },
+  statementFunding: async (
+    id: string,
+    params: { bill_id?: string; from?: string; to?: string },
+  ): Promise<StatementFundingReport> => {
+    const { data } = await api.get(`/accounts/${id}/statement-funding`, { params })
+    return data
+  },
   close: async (id: string): Promise<Account> => {
     const { data } = await api.post(`/accounts/${id}/close`)
     return data
@@ -313,6 +379,13 @@ export const transactions = {
     const { data } = await api.patch('/transactions/bulk-categorize', {
       transaction_ids: transactionIds,
       category_id: categoryId,
+    })
+    return data
+  },
+  bulkFundingDomain: async (transactionIds: string[], fundingDomainId: string | null): Promise<{ updated: number }> => {
+    const { data } = await api.patch('/transactions/bulk-funding-domain', {
+      transaction_ids: transactionIds,
+      funding_domain_id: fundingDomainId,
     })
     return data
   },
