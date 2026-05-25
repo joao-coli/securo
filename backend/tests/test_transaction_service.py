@@ -18,6 +18,7 @@ from app.services.transaction_service import (
     create_transaction,
     create_transfer,
     delete_transaction,
+    toggle_ignore_transaction,
     get_transaction,
     get_transactions,
     update_transaction,
@@ -162,11 +163,11 @@ async def test_get_transactions_pagination(session: AsyncSession, test_user, txn
         session.add(txn)
     await session.commit()
 
-    page1, total = await get_transactions(session, test_user.id, limit=2, page=1)
+    page1, total, _ = await get_transactions(session, test_user.id, limit=2, page=1)
     assert total >= 5
     assert len(page1) == 2
 
-    page2, _ = await get_transactions(session, test_user.id, limit=2, page=2)
+    page2, _, _ = await get_transactions(session, test_user.id, limit=2, page=2)
     assert len(page2) == 2
 
     # No overlap
@@ -213,7 +214,7 @@ async def test_get_transactions_filter_by_account(session: AsyncSession, test_us
     session.add_all([txn1, txn2])
     await session.commit()
 
-    results, _ = await get_transactions(session, test_user.id, account_id=txn_account.id)
+    results, _, _ = await get_transactions(session, test_user.id, account_id=txn_account.id)
     descs = {t.description for t in results}
     assert "In main" in descs
     assert "In other" not in descs
@@ -250,7 +251,7 @@ async def test_get_transactions_filter_by_category(
     session.add_all([txn1, txn2])
     await session.commit()
 
-    results, _ = await get_transactions(session, test_user.id, category_id=test_categories[0].id)
+    results, _, _ = await get_transactions(session, test_user.id, category_id=test_categories[0].id)
     descs = {t.description for t in results}
     assert "Cat A" in descs
     assert "Cat B" not in descs
@@ -283,7 +284,7 @@ async def test_get_transactions_filter_by_date_range(session: AsyncSession, test
     session.add_all([txn_jan, txn_mar])
     await session.commit()
 
-    results, _ = await get_transactions(
+    results, _, _ = await get_transactions(
         session,
         test_user.id,
         from_date=date(2025, 3, 1),
@@ -331,19 +332,19 @@ async def test_get_transactions_date_filter_respects_accounting_mode(
     march_window = dict(from_date=date(2025, 3, 1), to_date=date(2025, 3, 31))
 
     # Cash mode (default): the CC purchase lives in March, regular in April.
-    cash_april, _ = await get_transactions(session, test_user.id, **april_window)
+    cash_april, _, _ = await get_transactions(session, test_user.id, **april_window)
     assert {t.description for t in cash_april} == {"Regular"}
 
-    cash_march, _ = await get_transactions(session, test_user.id, **march_window)
+    cash_march, _, _ = await get_transactions(session, test_user.id, **march_window)
     assert {t.description for t in cash_march} == {"CC purchase"}
 
     # Accrual mode: both buckets shift to the bill-due month.
-    accrual_april, _ = await get_transactions(
+    accrual_april, _, _ = await get_transactions(
         session, test_user.id, accounting_mode="accrual", **april_window
     )
     assert {t.description for t in accrual_april} == {"CC purchase", "Regular"}
 
-    accrual_march, _ = await get_transactions(
+    accrual_march, _, _ = await get_transactions(
         session, test_user.id, accounting_mode="accrual", **march_window
     )
     assert {t.description for t in accrual_march} == set()
@@ -365,7 +366,7 @@ async def test_get_transactions_filter_by_search(session: AsyncSession, test_use
     session.add(txn)
     await session.commit()
 
-    results, _ = await get_transactions(session, test_user.id, search="netflix")
+    results, _, _ = await get_transactions(session, test_user.id, search="netflix")
     descs = {t.description for t in results}
     assert "NETFLIX SUBSCRIPTION" in descs
 
@@ -397,7 +398,7 @@ async def test_get_transactions_filter_by_type(session: AsyncSession, test_user,
     session.add_all([txn_debit, txn_credit])
     await session.commit()
 
-    results, _ = await get_transactions(session, test_user.id, txn_type="credit")
+    results, _, _ = await get_transactions(session, test_user.id, txn_type="credit")
     types = {t.type for t in results}
     assert "credit" in types
     assert all(t.type == "credit" for t in results)
@@ -496,6 +497,38 @@ async def test_delete_transaction(session: AsyncSession, test_user, txn_account)
 @pytest.mark.asyncio
 async def test_delete_transaction_not_found(session: AsyncSession, test_user):
     assert await delete_transaction(session, uuid.uuid4(), test_user.id) is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_ignore_transaction(session: AsyncSession, test_user, txn_account):
+    txn = Transaction(
+        id=uuid.uuid4(),
+        user_id=test_user.id,
+        account_id=txn_account.id,
+        description="ToIgnore",
+        amount=Decimal("10"),
+        date=date(2025, 3, 1),
+        type="debit",
+        source="manual",
+        created_at=datetime.now(timezone.utc),
+    )
+    session.add(txn)
+    await session.commit()
+
+    # First toggle: false → true
+    result = await toggle_ignore_transaction(session, txn.id, test_user.id)
+    assert result is not None
+    assert result.is_ignored is True
+
+    # Second toggle: true → false
+    result = await toggle_ignore_transaction(session, txn.id, test_user.id)
+    assert result is not None
+    assert result.is_ignored is False
+
+
+@pytest.mark.asyncio
+async def test_toggle_ignore_transaction_not_found(session: AsyncSession, test_user):
+    assert await toggle_ignore_transaction(session, uuid.uuid4(), test_user.id) is None
 
 
 # ---------------------------------------------------------------------------
@@ -730,7 +763,7 @@ async def test_get_transactions_uncategorized(session: AsyncSession, test_user, 
         amount=Decimal("50"), date=date.today(), type="debit",
         category_id=test_categories[0].id,
     ))
-    txns, _ = await get_transactions(session, test_user.id, uncategorized=True)
+    txns, _, _ = await get_transactions(session, test_user.id, uncategorized=True)
     descs = [t.description for t in txns]
     assert "Uncategorized" in descs
     assert "Categorized" not in descs
@@ -749,7 +782,7 @@ async def test_get_transactions_date_filter(session: AsyncSession, test_user, tx
         account_id=txn_account.id, description="Yesterday",
         amount=Decimal("10"), date=yesterday, type="debit",
     ))
-    txns, _ = await get_transactions(session, test_user.id, from_date=today, to_date=today)
+    txns, _, _ = await get_transactions(session, test_user.id, from_date=today, to_date=today)
     descs = [t.description for t in txns]
     assert "Today" in descs
     assert "Yesterday" not in descs
@@ -772,7 +805,7 @@ async def test_get_transactions_exclude_transfers(session: AsyncSession, test_us
         account_id=txn_account.id, description="Regular",
         amount=Decimal("50"), date=date.today(), type="debit",
     ))
-    txns, _ = await get_transactions(session, test_user.id, exclude_transfers=True)
+    txns, _, _ = await get_transactions(session, test_user.id, exclude_transfers=True)
     descs = [t.description for t in txns]
     assert "Regular" in descs
 
@@ -784,7 +817,7 @@ async def test_get_transactions_skip_pagination(session: AsyncSession, test_user
             account_id=txn_account.id, description=f"Txn{i}",
             amount=Decimal("10"), date=date.today(), type="debit",
         ))
-    txns, total = await get_transactions(session, test_user.id, skip_pagination=True, limit=2)
+    txns, total, _ = await get_transactions(session, test_user.id, skip_pagination=True, limit=2)
     assert len(txns) == total
 
 
@@ -977,7 +1010,7 @@ async def test_get_transactions_filters_tags_with_exact_match(
     session.add_all(txns)
     await session.commit()
 
-    matches, total = await get_transactions(
+    matches, total, _ = await get_transactions(
         session, test_user.id, tags=["#test"]
     )
     descriptions = {tx.description for tx in matches}
@@ -1008,7 +1041,7 @@ async def test_get_transactions_filters_multiple_tags_with_or(
     session.add_all(txns)
     await session.commit()
 
-    matches, _ = await get_transactions(
+    matches, _, _ = await get_transactions(
         session, test_user.id, tags=["#test", "#hey"]
     )
     assert {tx.description for tx in matches} == {"A", "B", "C"}

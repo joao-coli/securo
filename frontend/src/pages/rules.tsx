@@ -113,6 +113,7 @@ function actionSummary(actions: RuleAction[], categories: Category[], payeesList
         : `→ ${t('transactions.fundingDomain')}`
     }
     if (a.op === 'append_notes') return `→ ${t('rules.fieldNotes')}: ${a.value}`
+    if (a.op === 'ignore') return `→ ${t('rules.ignoreAction')}`
     return a.op
   }).join('  ') || t('rules.noActions')
 }
@@ -504,7 +505,12 @@ function RuleDialog({
   }
 
   function updateAction(i: number, patch: Partial<RuleAction>) {
-    setActions(prev => prev.map((a, idx) => idx === i ? { ...a, ...patch } : a))
+    setActions(prev => prev.map((a, idx) => {
+      if (idx !== i) return a
+      const next = { ...a, ...patch }
+      if ('op' in patch) next.value = ''
+      return next
+    }))
   }
 
   function removeAction(i: number) {
@@ -654,8 +660,13 @@ function RuleDialog({
                     <option value="set_payee">{t('rules.setPayee')}</option>
                     <option value="set_funding_domain">{t('rules.setFundingDomain')}</option>
                     <option value="append_notes">{t('rules.appendNotes')}</option>
+                    <option value="ignore">{t('rules.ignoreAction')}</option>
                   </select>
-                  {action.op === 'set_category' ? (
+                  {action.op === 'ignore' ? (
+                    <span className="w-0 flex-1 min-w-0 text-sm text-muted-foreground italic">
+                      {t('rules.ignoreActionHint')}
+                    </span>
+                  ) : action.op === 'set_category' ? (
                     <div className="w-0 flex-1 min-w-0">
                       <CategorySelect
                         value={action.value}

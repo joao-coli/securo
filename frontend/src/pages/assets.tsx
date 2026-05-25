@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { assets, assetGroups, currencies as currenciesApi } from '@/lib/api'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -232,6 +233,36 @@ export default function AssetsPage() {
     queryKey: ['portfolio-trend'],
     queryFn: () => assets.portfolioTrend(),
   })
+
+  // Publish a snapshot of what's on the Assets page so the global chat
+  // (⌘J) can answer "what does this chart mean / what are these
+  // wallets?" without needing the user to spell it out.
+  const totalValue = (assetsList ?? []).reduce(
+    (acc: number, a: { current_value?: number | null }) => acc + Number(a.current_value || 0),
+    0,
+  )
+  const byType: Record<string, number> = {}
+  for (const a of (assetsList ?? []) as Array<{ type?: string; current_value?: number | null }>) {
+    if (!a.type) continue
+    byType[a.type] = (byType[a.type] || 0) + Number(a.current_value || 0)
+  }
+  const portfolioTotal = (portfolioData as { total?: number } | undefined)?.total
+  const assetsCtxKey = `${assetsList?.length ?? 0}:${totalValue.toFixed(2)}:${portfolioTotal ?? ''}`
+  useRegisterPageChatContext(
+    {
+      path: '/assets',
+      label: 'Assets',
+      summary:
+        `Portfolio overview page. ${assetsList?.length ?? 0} assets totaling ` +
+        `~${totalValue.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })} ` +
+        `(by current_value). The portfolio chart shows value over time grouped by wallet or asset.`,
+      totals_by_type: byType,
+      asset_count: assetsList?.length ?? 0,
+      total_value: Number(totalValue.toFixed(2)),
+      hint: 'For exact per-asset numbers, use the get_net_worth or list_assets tools.',
+    },
+    assetsCtxKey,
+  )
 
   // `refetchQueries` (vs. `invalidateQueries`) forces an immediate refetch
   // regardless of stale-state heuristics. Our global staleTime of 5 min
@@ -1530,6 +1561,15 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
 
     return { series: s, displayTrend: newTrend }
   }, [mode, data, wallets, t])
+  const sortedSeries = useMemo(() => {
+    const lastRow = displayTrend[displayTrend.length - 1]
+    if (!lastRow) return series
+    return [...series].sort((a, b) => {
+      const av = Math.abs((lastRow[a.key] as number) ?? 0)
+      const bv = Math.abs((lastRow[b.key] as number) ?? 0)
+      return bv - av || a.name.localeCompare(b.name)
+    })
+  }, [series, displayTrend])
 
   return (
     <div className="border border-border rounded-xl bg-card shadow-sm p-5">
@@ -1562,7 +1602,7 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={displayTrend} margin={{ top: 4, right: 12, left: 0, bottom: 0 }}>
             <defs>
-              {series.map(s => (
+              {sortedSeries.map(s => (
                 <linearGradient key={s.key} id={`portfolio-grad-${s.key}`} x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor={s.color} stopOpacity={0.5} />
                   <stop offset="100%" stopColor={s.color} stopOpacity={0.1} />
@@ -1587,16 +1627,14 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
             <RechartsTooltip
               content={({ active, payload, label }) => {
                 if (!active || !payload?.length) return null
-                const totalEntry = payload.find(p => p.dataKey === '_total')
-                const dateTotal = totalEntry?.value as number ?? 0
-                const items = series
+                const row = displayTrend.find(r => r.date === label)
+                const dateTotal = row ? ((row._total as number) ?? 0) : 0
+                const items = sortedSeries
                   .map(s => {
-                    const row = displayTrend.find(r => r.date === label)
                     const val = row ? ((row[s.key] as number) ?? 0) : 0
                     return { key: s.key, name: s.name, value: val, color: s.color }
                   })
                   .filter(item => item.value !== 0)
-                  .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
                 if (items.length === 0) return null
                 return (
                   <div style={{ background: 'var(--card)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: '0.75rem', fontSize: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', padding: '10px 12px' }}>
@@ -1621,7 +1659,7 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
               }}
             />
             {/* Stacked areas — one colored band per series */}
-            {series.map(s => (
+            {sortedSeries.map(s => (
               <Area
                 key={s.key}
                 type="monotone"
@@ -1641,7 +1679,7 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
       </div>
       {/* Legend */}
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3 px-1">
-        {series.map(s => (
+        {sortedSeries.map(s => (
           <div key={s.key} className="flex items-center gap-1.5">
             <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: s.color }} />
             <span className="text-[11px] text-muted-foreground">{s.name}</span>

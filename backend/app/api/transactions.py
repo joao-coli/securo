@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.auth import current_active_user
 from app.core.database import get_async_session
 from app.models.user import User
-from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkFundingDomainRequest, BulkTagsRequest, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
+from app.schemas.transaction import BulkAddToGroupRequest, BulkCategorizeRequest, BulkFundingDomainRequest, BulkTagsRequest, CreateCounterpartRequest, LinkTransferRequest, TransactionCreate, TransactionRead, TransactionUpdate, TransferCreate, TransferRead
 from app.services import transaction_service
 from app.services.admin_service import get_credit_card_accounting_mode
 
@@ -26,11 +26,23 @@ def _tag_fx_fallback(tx: TransactionRead, primary_currency: str) -> TransactionR
     return tx
 
 
+class TransactionsSummary(BaseModel):
+    """Income / expense / net totals across all rows matching the active
+    filters (issue #185). Amounts are in the user's primary currency.
+    Floats (not Decimal) so the JSON payload matches `amount_primary`
+    and the frontend gets plain numbers."""
+    income: float
+    expense: float
+    net: float
+    currency: str
+
+
 class PaginatedTransactions(BaseModel):
     items: list[TransactionRead]
     total: int
     page: int
     limit: int
+    summary: Optional[TransactionsSummary] = None
 
 
 def _merge_id_filters(
@@ -65,13 +77,15 @@ async def list_transactions(
     include_opening_balance: bool = Query(False),
     exclude_transfers: bool = Query(False),
     tags: Optional[List[str]] = Query(None),
+    min_amount: Optional[float] = Query(None, ge=0, description="Filter to transactions with absolute amount >= this value (primary currency)."),
+    max_amount: Optional[float] = Query(None, ge=0, description="Filter to transactions with absolute amount <= this value (primary currency)."),
     sort_by: Optional[str] = Query(None, description="Column to sort by (date|amount|description|payee|category|account|type|status). Default: date desc."),
     sort_dir: str = Query("desc", regex="^(asc|desc)$"),
     session: AsyncSession = Depends(get_async_session),
     user: User = Depends(current_active_user),
 ):
     accounting_mode = await get_credit_card_accounting_mode(session)
-    transactions, total = await transaction_service.get_transactions(
+    transactions, total, summary = await transaction_service.get_transactions(
         session, user.id,
         account_ids=_merge_id_filters(account_id, account_ids),
         category_ids=_merge_id_filters(category_id, category_ids),
@@ -85,10 +99,18 @@ async def list_transactions(
         unbilled_only=unbilled_only,
         sort_by=sort_by,
         sort_dir=sort_dir,
+        min_amount=min_amount,
+        max_amount=max_amount,
+        include_summary=True,
     )
     primary_currency = user.primary_currency
     items = [_tag_fx_fallback(TransactionRead.model_validate(tx, from_attributes=True), primary_currency) for tx in transactions]
-    return PaginatedTransactions(items=items, total=total, page=page, limit=limit)
+    summary_out = (
+        TransactionsSummary(**summary, currency=primary_currency)
+        if summary is not None
+        else None
+    )
+    return PaginatedTransactions(items=items, total=total, page=page, limit=limit, summary=summary_out)
 
 
 @router.get("/export")
@@ -112,14 +134,14 @@ async def export_transactions(
     if transaction_ids:
         # Selection-only export: bypass user-facing filters but keep the
         # service-level user/visibility scoping intact.
-        transactions, _ = await transaction_service.get_transactions(
+        transactions, _, _ = await transaction_service.get_transactions(
             session, user.id,
             skip_pagination=True,
             accounting_mode=accounting_mode,
             transaction_ids=transaction_ids,
         )
     else:
-        transactions, _ = await transaction_service.get_transactions(
+        transactions, _, _ = await transaction_service.get_transactions(
             session, user.id,
             account_ids=_merge_id_filters(account_id, account_ids),
             category_ids=_merge_id_filters(category_id, category_ids),
@@ -273,6 +295,31 @@ async def link_transfer(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
+@router.post("/{transaction_id}/create-counterpart", response_model=TransferRead, status_code=status.HTTP_201_CREATED)
+async def create_counterpart(
+    transaction_id: uuid.UUID,
+    data: CreateCounterpartRequest,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    """Mark a transaction as a transfer by auto-creating its counterpart in
+    another (typically manual) account."""
+    try:
+        debit_tx, credit_tx = await transaction_service.create_transfer_counterpart(
+            session, user.id, transaction_id, data.to_account_id
+        )
+        debit_full = await transaction_service.get_transaction(session, debit_tx.id, user.id)
+        credit_full = await transaction_service.get_transaction(session, credit_tx.id, user.id)
+        primary_currency = user.primary_currency
+        return TransferRead(
+            debit=_tag_fx_fallback(TransactionRead.model_validate(debit_full, from_attributes=True), primary_currency),
+            credit=_tag_fx_fallback(TransactionRead.model_validate(credit_full, from_attributes=True), primary_currency),
+            transfer_pair_id=debit_tx.transfer_pair_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
 @router.get("/{transaction_id}/transfer-candidates", response_model=list[TransactionRead])
 async def get_transfer_candidates(
     transaction_id: uuid.UUID,
@@ -334,6 +381,19 @@ async def update_transaction(
         transaction = await transaction_service.update_transaction(session, transaction_id, user.id, data)
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    if not transaction:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    primary_currency = user.primary_currency
+    return _tag_fx_fallback(TransactionRead.model_validate(transaction, from_attributes=True), primary_currency)
+
+
+@router.patch("/{transaction_id}/ignore", response_model=TransactionRead)
+async def toggle_ignore_transaction(
+    transaction_id: uuid.UUID,
+    session: AsyncSession = Depends(get_async_session),
+    user: User = Depends(current_active_user),
+):
+    transaction = await transaction_service.toggle_ignore_transaction(session, transaction_id, user.id)
     if not transaction:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
     primary_currency = user.primary_currency

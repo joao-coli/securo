@@ -1,6 +1,7 @@
 import re
 import uuid
 from datetime import date
+from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import select, func, or_, update
@@ -76,7 +77,12 @@ async def get_transactions(
     sort_by: Optional[str] = None,
     sort_dir: str = "desc",
     transaction_ids: Optional[list[uuid.UUID]] = None,
-) -> tuple[list[Transaction], int]:
+    currency: Optional[str] = None,
+    min_amount: Optional[float] = None,
+    max_amount: Optional[float] = None,
+    account_types: Optional[list[str]] = None,
+    include_summary: bool = False,
+) -> tuple[list[Transaction], int, Optional[dict]]:
     # In "accrual" mode, bucket/order by effective_date so list filters
     # line up with the cash-flow view used by the dashboard and reports.
     # When the user has set a manual cycle override (effective_bill_date)
@@ -191,6 +197,22 @@ async def get_transactions(
         base_query = base_query.where(Transaction.transfer_pair_id.is_(None))
     if txn_type:
         base_query = base_query.where(Transaction.type == txn_type)
+    if currency:
+        # Native-currency filter — match the column verbatim. Lets agents
+        # answer "do I have any EUR transactions?" without text-searching
+        # the description column.
+        base_query = base_query.where(Transaction.currency == currency.upper())
+    if min_amount is not None or max_amount is not None:
+        # Amount filters operate on the primary-currency value when
+        # available so cross-currency totals make sense; fall back to the
+        # native amount on rows that haven't been stamped yet.
+        amount_expr = func.coalesce(Transaction.amount_primary, Transaction.amount)
+        if min_amount is not None:
+            base_query = base_query.where(amount_expr >= min_amount)
+        if max_amount is not None:
+            base_query = base_query.where(amount_expr <= max_amount)
+    if account_types:
+        base_query = base_query.where(Account.type.in_(account_types))
     # Bill-driven filter: when the caller passes bill_id, include
     #   (a) txs linked to this bill via Pluggy's billId mapping (handles
     #       charges the bank rolled into a bill whose nominal range doesn't
@@ -277,12 +299,58 @@ async def get_transactions(
     count_query = select(func.count()).select_from(base_query.subquery())
     total = await session.scalar(count_query)
 
+    # Filtered summary (issue #185): income / expense / net across ALL
+    # rows matching the active filters — not just the current page — so
+    # the UI can show an accurate total even when results span pages.
+    # Cross-currency rows are normalized to their primary-currency amount
+    # when stamped (coalesce → native amount as fallback for unstamped
+    # rows). Computed before pagination so it covers the whole result set.
+    summary: Optional[dict] = None
+    if include_summary:
+        ignored_category_ids = select(Category.id).where(Category.is_ignored == True)
+        pnl_subq = base_query.where(
+        Transaction.is_ignored == False,
+        or_(
+            Transaction.category_id.is_(None),
+            Transaction.category_id.not_in(ignored_category_ids),
+        ),
+    ).subquery()
+        amount_norm = func.coalesce(
+            pnl_subq.c.amount_primary, pnl_subq.c.amount
+        )
+        summary_rows = await session.execute(
+            select(
+                pnl_subq.c.type,
+                func.coalesce(func.sum(func.abs(amount_norm)), 0),
+            ).group_by(pnl_subq.c.type)
+        )
+        income = Decimal("0")
+        expense = Decimal("0")
+        for row_type, row_total in summary_rows:
+            if row_type == "credit":
+                income = Decimal(str(row_total or 0))
+            elif row_type == "debit":
+                expense = Decimal(str(row_total or 0))
+        summary = {
+            "income": income,
+            "expense": expense,
+            "net": income - expense,
+        }
+
     # Apply ordering (and pagination unless skipped). Bill-view callers
     # order by purchase date so the in-cycle list matches the bank's own
     # statement ordering regardless of accounting mode.
     default_order_col = bill_view_date_col if in_bill_view else date_col
     sort_columns: dict[str, object] = {
+        # `date` is the cycle/accrual-aware column the UI lists use so its
+        # ordering matches the cash-flow & dashboard views.
         "date": default_order_col,
+        # `transaction_date` orders strictly by Transaction.date (purchase
+        # date), regardless of effective_bill_date. Useful for "what's my
+        # most recent transaction?" where credit-card bill projections
+        # would otherwise float old purchases to the top because their
+        # bill due date is in the future.
+        "transaction_date": Transaction.date,
         "amount": Transaction.amount,
         "description": Transaction.description,
         "payee": Payee.name,
@@ -290,6 +358,7 @@ async def get_transactions(
         "account": Account.name,
         "type": Transaction.type,
         "status": Transaction.status,
+        "created_at": Transaction.created_at,
     }
     chosen_col = sort_columns.get(sort_by) if sort_by else None
     if chosen_col is None:
@@ -321,7 +390,8 @@ async def get_transactions(
         for tx in transactions:
             tx.attachment_count = counts.get(tx.id, 0)
             tx.payee_name = tx.payee_entity.name if tx.payee_entity else None
-
+            if not tx.is_ignored and tx.category and tx.category.is_ignored:
+                tx.is_ignored = True
         # Tag shared rows with the viewer's share + the source group.
         # Owned rows stay as-is. We pre-compute the viewer's linked
         # member ids → group ids once, then look up each transaction's
@@ -331,7 +401,7 @@ async def get_transactions(
         # and the frontend needs `is_shared` to lock them from edits.
         await _tag_shared_view(session, transactions, user_id)
 
-    return transactions, total or 0
+    return transactions, total or 0, summary
 
 
 async def _tag_shared_view(
@@ -796,6 +866,93 @@ async def link_existing_as_transfer(
     return debit_tx, credit_tx
 
 
+async def create_transfer_counterpart(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    transaction_id: uuid.UUID,
+    to_account_id: uuid.UUID,
+) -> tuple[Transaction, Transaction]:
+    """Mark an existing transaction as a transfer by auto-creating its
+    counterpart in another account.
+
+    Used when the counterpart account is manual (not bank-synced), so no
+    matching transaction exists to link against. The counterpart mirrors the
+    anchor's date / description / notes with the opposite type, converting the
+    amount when the destination account uses a different currency.
+    """
+    from decimal import Decimal
+
+    anchor = await get_transaction(session, transaction_id, user_id)
+    if not anchor:
+        raise ValueError("Transaction not found")
+    if anchor.transfer_pair_id is not None:
+        raise ValueError("Transaction is already part of a transfer")
+    if anchor.account_id == to_account_id:
+        raise ValueError("Counterpart must be in a different account")
+
+    to_result = await session.execute(
+        select(Account)
+        .outerjoin(BankConnection)
+        .where(
+            Account.id == to_account_id,
+            or_(Account.user_id == user_id, BankConnection.user_id == user_id),
+        )
+    )
+    to_account = to_result.scalar_one_or_none()
+    if not to_account:
+        raise ValueError("Destination account not found")
+
+    opposing_type = "credit" if anchor.type == "debit" else "debit"
+
+    # Convert the amount when the destination account uses another currency.
+    if anchor.currency != to_account.currency:
+        counterpart_amount, _ = await fx_convert(
+            session, Decimal(str(anchor.amount)), anchor.currency, to_account.currency, anchor.date
+        )
+    else:
+        counterpart_amount = anchor.amount
+
+    transfer_pair_id = uuid.uuid4()
+
+    counterpart_tx = Transaction(
+        user_id=user_id,
+        account_id=to_account_id,
+        description=anchor.description,
+        amount=counterpart_amount,
+        currency=to_account.currency,
+        date=anchor.date,
+        type=opposing_type,
+        source="transfer",
+        notes=anchor.notes,
+        transfer_pair_id=transfer_pair_id,
+    )
+    apply_effective_date(counterpart_tx, to_account)
+    session.add(counterpart_tx)
+
+    # Link the anchor into the pair; transfers are excluded from category reports.
+    anchor.transfer_pair_id = transfer_pair_id
+    anchor.category_id = None
+
+    await session.flush()
+    await stamp_primary_amount(session, user_id, counterpart_tx)
+
+    # Cross-currency: keep both sides on the same primary amount.
+    if anchor.currency != to_account.currency and anchor.amount_primary is not None:
+        counterpart_tx.amount_primary = anchor.amount_primary
+        if counterpart_tx.amount and Decimal(str(counterpart_tx.amount)):
+            counterpart_tx.fx_rate_used = Decimal(str(anchor.amount_primary)) / Decimal(
+                str(counterpart_tx.amount)
+            )
+
+    await session.commit()
+    await session.refresh(anchor, ["category"])
+    await session.refresh(counterpart_tx, ["category"])
+
+    debit_tx = anchor if anchor.type == "debit" else counterpart_tx
+    credit_tx = counterpart_tx if anchor.type == "debit" else anchor
+    return debit_tx, credit_tx
+
+
 async def _resync_bill_link_from_override(
     session: AsyncSession, transaction: Transaction, account: Optional[Account]
 ) -> None:
@@ -1195,6 +1352,22 @@ async def bulk_add_to_group(
 
     await session.commit()
     return {"updated": updated, "skipped": skipped}
+
+
+async def toggle_ignore_transaction(
+    session: AsyncSession, transaction_id: uuid.UUID, user_id: uuid.UUID
+) -> Optional[Transaction]:
+    """Flip the is_ignored flag on a transaction. Acts immediately (no
+    other field is touched) so the edit dialog can offer ignore as a
+    one-click action alongside delete, instead of bundling it into the
+    form's Salvar flow."""
+    transaction = await get_transaction(session, transaction_id, user_id)
+    if not transaction:
+        return None
+    transaction.is_ignored = not transaction.is_ignored
+    await session.commit()
+    await session.refresh(transaction)
+    return transaction
 
 
 async def delete_transaction(

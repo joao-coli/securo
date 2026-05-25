@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { getAccountName } from '@/lib/account-utils'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
@@ -23,7 +24,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertTriangle, ArrowLeftRight, ArrowUp, ArrowDown, Check, Copy, Download, HelpCircle, Info, Paperclip, Users, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, ArrowUp, ArrowDown, Check, Copy, Download, HelpCircle, Info, Paperclip, Users, X, EyeClosed } from 'lucide-react'
 import type { Transaction } from '@/types'
 import { PageHeader } from '@/components/page-header'
 import { CategoryIcon } from '@/components/category-icon'
@@ -86,6 +87,8 @@ export default function TransactionsPage() {
   const [filterPayee, setFilterPayee] = useState<string>(searchParams.get('payee_id') ?? '')
   const [filterGroupId, setFilterGroupId] = useState<string>(searchParams.get('group_id') ?? '')
   const [filterType, setFilterType] = useState<string>(searchParams.get('type') ?? '')
+  const [filterMinAmount, setFilterMinAmount] = useState<string>(searchParams.get('min_amount') ?? '')
+  const [filterMaxAmount, setFilterMaxAmount] = useState<string>(searchParams.get('max_amount') ?? '')
   const [tagFilters, setTagFilters] = useState<string[]>([])
 
   // When the page is opened with a `group_id`, fetch its name so the
@@ -152,6 +155,8 @@ export default function TransactionsPage() {
     setFilterAccountIds(accounts ? accounts.split(',') : []);
     setFilterFrom(searchParams.get('from') ?? '');
     setFilterTo(searchParams.get('to') ?? '');
+    setFilterMinAmount(searchParams.get('min_amount') ?? '');
+    setFilterMaxAmount(searchParams.get('max_amount') ?? '');
     setPage(1)
   }, [searchParams])
 
@@ -170,6 +175,8 @@ export default function TransactionsPage() {
         ['account_id', filterAccountIds.join(',')],
         ['from', filterFrom],
         ['to', filterTo],
+        ['min_amount', filterMinAmount],
+        ['max_amount', filterMaxAmount],
       ].filter(([, v]) => v.length),
     );
 
@@ -189,6 +196,8 @@ export default function TransactionsPage() {
     filterAccountIds,
     filterFrom,
     filterTo,
+    filterMinAmount,
+    filterMaxAmount,
   ]);
 
   useEffect(() => {
@@ -204,7 +213,12 @@ export default function TransactionsPage() {
   useEffect(() => {
     setSelectedIds(new Set())
     setBulkCategory('')
-  }, [page, filterAccountIds, filterCategoryIds, filterUncategorized, filterPayee, filterType, filterFrom, filterTo, searchQuery])
+  }, [page, filterAccountIds, filterCategoryIds, filterUncategorized, filterPayee, filterType, filterFrom, filterTo, filterMinAmount, filterMaxAmount, searchQuery])
+
+  // Reset bulk category when selection changes so the same category can be re-applied
+  useEffect(() => {
+    setBulkCategory('')
+  }, [selectedIds])
 
   // Scroll to and flash a highlighted row after navigation (e.g. opened via
   // the command palette). Re-runs whenever highlightId or the current data
@@ -228,7 +242,7 @@ export default function TransactionsPage() {
   }, [highlightId, searchQuery, filterPayee, filterCategoryIds, page])
 
   const { data, isLoading } = useQuery({
-    queryKey: ['transactions', page, filterAccountIds, filterCategoryIds, filterUncategorized, filterPayee, filterGroupId, filterType, filterFrom, filterTo, searchQuery, tagFilters, grid.sortBy, grid.sortDir],
+    queryKey: ['transactions', page, filterAccountIds, filterCategoryIds, filterUncategorized, filterPayee, filterGroupId, filterType, filterFrom, filterTo, filterMinAmount, filterMaxAmount, searchQuery, tagFilters, grid.sortBy, grid.sortDir],
     queryFn: () =>
       transactions.list({
         page,
@@ -241,11 +255,47 @@ export default function TransactionsPage() {
         uncategorized: filterUncategorized ? true : undefined,
         from: filterFrom || undefined,
         to: filterTo || undefined,
+        min_amount: filterMinAmount ? Number(filterMinAmount) : undefined,
+        max_amount: filterMaxAmount ? Number(filterMaxAmount) : undefined,
         q: searchQuery || undefined,
         tags: tagFilters.length > 0 ? tagFilters : undefined,
         ...grid.apiSort,
       }),
   })
+
+  // Publish the active filters + result count to the global chat panel.
+  // The agent uses this so "what about THIS list?" / "soma essas" /
+  // "categorize these" resolve against the filtered view, not the user's
+  // entire history. Free-form blob — backend turns it into a primer.
+  const ctxFilters = {
+    search: searchQuery || undefined,
+    account_ids: filterAccountIds.length ? filterAccountIds : undefined,
+    category_ids: filterCategoryIds.length ? filterCategoryIds : undefined,
+    payee_id: filterPayee || undefined,
+    group_id: filterGroupId || undefined,
+    type: filterType || undefined,
+    uncategorized: filterUncategorized || undefined,
+    from: filterFrom || undefined,
+    to: filterTo || undefined,
+    min_amount: filterMinAmount || undefined,
+    max_amount: filterMaxAmount || undefined,
+    tags: tagFilters.length ? tagFilters : undefined,
+    sort_by: grid.sortBy,
+    sort_dir: grid.sortDir,
+    page,
+  }
+  const ctxKey = JSON.stringify(ctxFilters) + ':' + (data?.total ?? '')
+  useRegisterPageChatContext(
+    {
+      path: '/transactions',
+      label: 'Transactions',
+      summary: data?.total != null
+        ? `${data.total} transaction(s) match the active filters (showing page ${page}, 20 per page).`
+        : 'Transactions list with active filters.',
+      filters: ctxFilters,
+    },
+    ctxKey,
+  )
 
   const { data: categoriesList } = useQuery({
     queryKey: ['categories'],
@@ -415,6 +465,21 @@ export default function TransactionsPage() {
     },
   })
 
+  const createCounterpartMutation = useMutation({
+    mutationFn: ({ anchorId, toAccountId }: { anchorId: string; toAccountId: string }) =>
+      transactions.createTransferCounterpart(anchorId, toAccountId),
+    onSuccess: () => {
+      invalidateAfterTxMutation()
+      queryClient.invalidateQueries({ queryKey: ['transfer-candidates'] })
+      setLinkTransferDialogOpen(false)
+      setSelectedIds(new Set())
+      toast.success(t('transactions.linkTransferSuccess'))
+    },
+    onError: (error) => {
+      toast.error(extractApiError(error))
+    },
+  })
+
   const unlinkTransferMutation = useMutation({
     mutationFn: (pairId: string) => transactions.unlinkTransfer(pairId),
     onSuccess: () => {
@@ -474,6 +539,20 @@ export default function TransactionsPage() {
 
   const allSelected = selectableItems.length > 0 && selectableItems.every(tx => selectedIds.has(tx.id))
   const someSelected = selectableItems.some(tx => selectedIds.has(tx.id)) && !allSelected
+
+  // Net total of the currently-selected rows (issue #185). Selection is
+  // always page-scoped (cleared on page/filter change), so summing the
+  // visible page covers every selected id. Cross-currency rows use their
+  // primary-currency amount; credits add, debits subtract.
+  const selectedNet = useMemo(() => {
+    let net = 0
+    for (const tx of data?.items ?? []) {
+      if (!selectedIds.has(tx.id)) continue
+      const base = Math.abs(Number(tx.amount_primary ?? tx.amount))
+      net += tx.type === 'credit' ? base : -base
+    }
+    return net
+  }, [data?.items, selectedIds])
 
   // Resolve the currently-selected transactions into a valid debit/credit pair
   // for the "Link as transfer" action. Returns null if the pair is invalid
@@ -632,11 +711,11 @@ export default function TransactionsPage() {
       <>
         <span
           className={`text-xs md:text-sm font-bold tabular-nums ${
-            tx.type === 'credit' ? 'text-emerald-600' : 'text-rose-500'
+            tx.is_ignored ? 'text-gray-500': tx.type === 'credit' ? 'text-emerald-600' : 'text-rose-500'
           }`}
         >
           {mask(
-            `${tx.type === 'credit' ? '+' : '−'}${formatCurrency(
+            `${tx.is_ignored ? ' ' : tx.type === 'credit' ? '+' : '−'}${formatCurrency(
               Math.abs(displayAmount),
               tx.currency,
               locale,
@@ -706,6 +785,15 @@ export default function TransactionsPage() {
                 <span title={t('transactions.transferTooltip')}><HelpCircle className="h-3 w-3 text-blue-400" /></span>
               </span>
             )}
+            {tx.is_ignored && 
+              (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs text-gray-600 font-normal bg-gray-100 border border-gray-200 rounded px-1.5 py-0.5">
+                <EyeClosed className="h-3 w-3" />
+                {t('transactions.ignored')}
+                <span title={t('transactions.ignoreTransferHint')}><HelpCircle className="h-3 w-3 text-blue-400" /></span>
+              </span>
+                            )
+            }
             {recurringList?.some(r => r.description === tx.description && r.type === tx.type) && (
               <span className="text-[10px] font-semibold uppercase tracking-wide text-primary bg-primary/5 border border-primary/10 px-1.5 py-0.5 rounded-full">
                 {t('transactions.recurringBadge')}
@@ -965,6 +1053,9 @@ export default function TransactionsPage() {
         filterFrom={filterFrom}
         filterTo={filterTo}
         onDateRangeChange={(from, to) => { setFilterFrom(from); setFilterTo(to); setPage(1) }}
+        filterMinAmount={filterMinAmount}
+        filterMaxAmount={filterMaxAmount}
+        onAmountRangeChange={(min, max) => { setFilterMinAmount(min); setFilterMaxAmount(max); setPage(1) }}
         onClearAll={() => {
           setFilterFrom('')
           setFilterTo('')
@@ -974,6 +1065,8 @@ export default function TransactionsPage() {
           setFilterPayee('')
           setFilterGroupId('')
           setFilterType('')
+          setFilterMinAmount('')
+          setFilterMaxAmount('')
           setSearchInput('')
           setSearchQuery('')
           clearTagFilters()
@@ -1096,6 +1189,37 @@ export default function TransactionsPage() {
           </Table>
           </div>
         )}
+        {/* Filtered summary (issue #185): income / expenses / net across
+            ALL rows matching the active filters — not just this page. */}
+        {!isLoading && data?.summary && filteredItems.length > 0 && (
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-t border-border bg-muted/30 px-4 py-2.5">
+            <span className="mr-auto text-xs text-muted-foreground">
+              {t('transactions.summaryCount', { count: data.total })}
+            </span>
+            <span className="flex items-baseline gap-1.5 text-xs">
+              <span className="text-muted-foreground">{t('transactions.summaryIncome')}</span>
+              <span className="text-sm font-semibold tabular-nums text-emerald-600">
+                {mask(formatCurrency(data.summary.income, data.summary.currency, locale))}
+              </span>
+            </span>
+            <span className="flex items-baseline gap-1.5 text-xs">
+              <span className="text-muted-foreground">{t('transactions.summaryExpenses')}</span>
+              <span className="text-sm font-semibold tabular-nums text-rose-500">
+                {mask(formatCurrency(data.summary.expense, data.summary.currency, locale))}
+              </span>
+            </span>
+            <span className="flex items-baseline gap-1.5 text-xs">
+              <span className="text-muted-foreground">{t('transactions.summaryNet')}</span>
+              <span
+                className={`text-sm font-bold tabular-nums ${
+                  data.summary.net >= 0 ? 'text-emerald-600' : 'text-rose-500'
+                }`}
+              >
+                {mask(formatCurrency(data.summary.net, data.summary.currency, locale))}
+              </span>
+            </span>
+          </div>
+        )}
       </div>
 
       {/* Pagination */}
@@ -1132,18 +1256,39 @@ export default function TransactionsPage() {
       >
         <div className="mx-auto max-w-7xl px-3 md:px-6 pb-4 md:pb-6">
           <div className="flex items-stretch gap-1.5 bg-card border border-border shadow-xl rounded-2xl p-2">
-            {/* Selection count */}
-            <div className="flex items-center gap-2 pl-3 pr-4 text-sm font-medium text-foreground whitespace-nowrap">
-              <span className="inline-flex items-center justify-center size-6 rounded-full bg-primary/10 text-primary text-xs font-semibold">
+            {/* Selection count + net total — stacked vertically so the
+                sum (issue #185) adds no horizontal width to an already
+                crowded bar. The sum is hidden below sm where only the
+                count pill shows. */}
+            <div className="flex items-center gap-2.5 pl-3 pr-4 whitespace-nowrap">
+              <span className="inline-flex items-center justify-center size-6 rounded-full bg-primary/10 text-primary text-xs font-semibold shrink-0">
                 {selectedIds.size}
               </span>
-              <span className="hidden sm:inline">{t('transactions.selected')}</span>
+              <div className="hidden sm:flex flex-col leading-tight">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  {t('transactions.selected')}
+                </span>
+                <span
+                  className={`text-sm font-bold tabular-nums ${
+                    selectedNet >= 0 ? 'text-emerald-600' : 'text-rose-500'
+                  }`}
+                >
+                  {mask(
+                    `${selectedNet >= 0 ? '+' : '−'}${formatCurrency(
+                      Math.abs(selectedNet),
+                      userCurrency,
+                      locale,
+                    )}`,
+                  )}
+                </span>
+              </div>
             </div>
 
             <div className="w-px bg-border/60 self-stretch" />
 
             {/* Categorize — fires on selection, no separate Apply button */}
             <CategorySelect
+              key={bulkCategory}
               value={bulkCategory}
               onChange={(next) => {
                 setBulkCategory(next)
@@ -1260,7 +1405,10 @@ export default function TransactionsPage() {
         onConfirm={(debitId, creditId) => {
           linkTransferMutation.mutate([debitId, creditId])
         }}
-        loading={linkTransferMutation.isPending}
+        onCreateCounterpart={(anchorId, toAccountId) => {
+          createCounterpartMutation.mutate({ anchorId, toAccountId })
+        }}
+        loading={linkTransferMutation.isPending || createCounterpartMutation.isPending}
       />
 
       {/* Transfer Dialog */}
@@ -1295,6 +1443,7 @@ export default function TransactionsPage() {
         onSave={handleTransactionSave}
         onDelete={editingTx ? () => deleteMutation.mutate(editingTx.id) : undefined}
         onUnlinkTransfer={(pairId) => unlinkTransferMutation.mutate(pairId)}
+        onIgnoreChanged={invalidateAfterTxMutation}
         loading={createMutation.isPending || updateMutation.isPending || deleteMutation.isPending || unlinkTransferMutation.isPending}
         error={createMutation.error || updateMutation.error ? extractApiError(createMutation.error || updateMutation.error) : null}
         isSynced={editingTx?.source === 'sync'}

@@ -45,6 +45,7 @@ export interface Category {
   color: string
   is_system: boolean
   treat_as_transfer: boolean
+  is_ignored: boolean
 }
 
 export interface CategoryGroup {
@@ -84,6 +85,7 @@ export interface BankConnection {
   user_id: string
   provider: string
   institution_name: string
+  display_name: string | null
   external_id: string
   status: string
   settings: ConnectionSettings | null
@@ -259,6 +261,8 @@ export interface Transaction {
   // Display name of the parent's owner (the person who actually paid).
   // Derived per-request from the group's `is_self` member.
   parent_owner_name?: string | null
+  // Flag to exclude this transaction from reports and dashboard aggregations
+  is_ignored: boolean
 }
 
 export type ShareType = 'equal' | 'exact' | 'percent'
@@ -370,7 +374,7 @@ export interface RuleCondition {
   value: string | number
 }
 
-export type RuleActionOp = 'set_category' | 'set_payee' | 'set_funding_domain' | 'append_notes'
+export type RuleActionOp = 'set_category' | 'set_payee' | 'set_funding_domain' | 'append_notes' | 'ignore'
 
 export interface RuleAction {
   op: RuleActionOp
@@ -399,6 +403,29 @@ export interface ImportLog {
   total_credit: number
   total_debit: number
   created_at: string
+}
+
+export interface ImportPreviewTransaction {
+  description: string
+  amount: number
+  date: string
+  type: 'debit' | 'credit'
+  external_id?: string | null
+  currency?: string | null
+  fx_rate?: number | null
+  payee_raw?: string | null
+  category_name?: string | null
+  suggested_category_id?: string | null
+  suggested_category_name?: string | null
+  excluded?: boolean
+  category_id?: string | null
+  force_uncategorized?: boolean
+}
+
+export interface ImportReviewTransaction extends ImportPreviewTransaction {
+  _id: string
+  excluded: boolean
+  selected_category_id?: string | null
 }
 
 export interface RecurringTransaction {
@@ -433,6 +460,7 @@ export interface ProjectedTransaction {
   category_name: string | null
   category_icon: string | null
   category_color: string | null
+  is_ignored: boolean
 }
 
 export interface DashboardSummary {
@@ -626,6 +654,19 @@ export interface PaginatedResponse<T> {
   limit: number
 }
 
+// Income / expense / net totals for all transactions matching the active
+// filters (issue #185) — accompanies the paginated /transactions response.
+export interface TransactionsSummary {
+  income: number
+  expense: number
+  net: number
+  currency: string
+}
+
+export interface PaginatedTransactions extends PaginatedResponse<Transaction> {
+  summary?: TransactionsSummary
+}
+
 // Reports (universal schema for all report types)
 export interface ReportBreakdown {
   key: string
@@ -652,6 +693,9 @@ export interface ReportMeta {
   series_keys: string[]
   currency: string
   interval: string
+  forecast_start_date?: string | null
+  baseline_active?: boolean
+  baseline_lookback_days?: number | null
 }
 
 export interface ReportCompositionItem {

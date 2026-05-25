@@ -138,6 +138,82 @@ async def test_list_transactions_filter_by_category_ids_no_match(
 
 
 @pytest.mark.asyncio
+async def test_list_transactions_filter_by_exact_amount(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction],
+):
+    """Setting min_amount==max_amount matches only that exact amount (issue #212)."""
+    response = await client.get(
+        "/api/transactions?min_amount=45&max_amount=45", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["description"] == "IFOOD RESTAURANTE"
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_filter_by_min_amount(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction],
+):
+    """min_amount alone is an open-ended lower bound."""
+    response = await client.get(
+        "/api/transactions?min_amount=40", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    descriptions = {item["description"] for item in data["items"]}
+    # 45.00 IFOOD, 150.00 PIX, 8000.00 SALARIO — UBER 25.50 and NETFLIX 39.90 dropped
+    assert descriptions == {"IFOOD RESTAURANTE", "PIX RECEBIDO", "SALARIO FEV"}
+    assert data["total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_filter_by_max_amount(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction],
+):
+    """max_amount alone is an open-ended upper bound."""
+    response = await client.get(
+        "/api/transactions?max_amount=50", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    descriptions = {item["description"] for item in data["items"]}
+    # 25.50 UBER, 39.90 NETFLIX, 45.00 IFOOD — PIX 150 and SALARIO 8000 dropped
+    assert descriptions == {"UBER TRIP", "NETFLIX", "IFOOD RESTAURANTE"}
+    assert data["total"] == 3
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_filter_by_amount_range(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction],
+):
+    """Combining min_amount + max_amount filters to a closed range."""
+    response = await client.get(
+        "/api/transactions?min_amount=40&max_amount=60", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["items"][0]["description"] == "IFOOD RESTAURANTE"
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_amount_filter_combines_with_type(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction],
+):
+    """Amount filters compose with other filters (here: type=debit)."""
+    response = await client.get(
+        "/api/transactions?max_amount=50&type=debit", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    descriptions = {item["description"] for item in data["items"]}
+    # Among <=50: UBER (debit), NETFLIX (debit), IFOOD (debit). PIX 150 excluded by amount.
+    assert descriptions == {"UBER TRIP", "NETFLIX", "IFOOD RESTAURANTE"}
+    assert data["total"] == 3
+
+
+@pytest.mark.asyncio
 async def test_list_transactions_filter_by_account_ids_multi(
     client: AsyncClient,
     auth_headers,
@@ -631,3 +707,52 @@ async def test_create_transfer_invalid_account(client: AsyncClient, auth_headers
         headers=auth_headers,
     )
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_summary(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction]
+):
+    """The list response carries an income/expense/net summary across all
+    matching rows (issue #185). Fixture: credits 8000 + 150, debits
+    25.50 + 45.00 + 39.90."""
+    response = await client.get("/api/transactions", headers=auth_headers)
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary is not None
+    assert summary["income"] == pytest.approx(8150.0)
+    assert summary["expense"] == pytest.approx(110.4)
+    assert summary["net"] == pytest.approx(8039.6)
+    assert summary["currency"]
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_summary_spans_all_pages(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction]
+):
+    """The summary covers every matching row, not just the current page —
+    so a paginated request still totals the full result set."""
+    response = await client.get(
+        "/api/transactions?page=1&limit=2", headers=auth_headers
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data["items"]) == 2  # page is capped
+    assert data["summary"]["net"] == pytest.approx(8039.6)  # total is not
+
+
+@pytest.mark.asyncio
+async def test_list_transactions_summary_respects_filters(
+    client: AsyncClient, auth_headers, test_transactions: list[Transaction],
+    test_categories: list[Category],
+):
+    """Filtering narrows the summary the same way it narrows the rows."""
+    cat_id = test_categories[1].id  # Transporte → UBER TRIP, 25.50 debit
+    response = await client.get(
+        f"/api/transactions?category_id={cat_id}", headers=auth_headers
+    )
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["income"] == pytest.approx(0.0)
+    assert summary["expense"] == pytest.approx(25.5)
+    assert summary["net"] == pytest.approx(-25.5)

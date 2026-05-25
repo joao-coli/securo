@@ -893,7 +893,8 @@ async def delete_rule(session: AsyncSession, rule_id: uuid.UUID, user_id: uuid.U
 
 
 async def apply_rules_to_transaction(
-    session: AsyncSession, user_id: uuid.UUID, transaction: Transaction
+    session: AsyncSession, user_id: uuid.UUID, transaction: Transaction,
+    skip_category_rules: bool = False,
 ) -> None:
     """Apply all active rules to a transaction, modifying it in-place. Commits nothing."""
     result = await session.execute(
@@ -904,7 +905,7 @@ async def apply_rules_to_transaction(
     rules = result.scalars().all()
     assignable_funding_domain_ids = await _assignable_funding_domain_ids(session, user_id, list(rules))
 
-    category_set = transaction.category_id is not None
+    category_set = transaction.category_id is not None or skip_category_rules
 
     for rule in rules:
         conditions = rule.conditions or []

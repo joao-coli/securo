@@ -78,9 +78,46 @@ def test_date_points_monthly():
     start = date(2025, 1, 1)
     end = date(2025, 6, 15)
     points = _date_points(start, end, "monthly")
-    assert points[0] == start
-    # Last point should be end (June 15), not June 1
-    assert points[-1] == end
+    assert points[0] == date(2025, 1, 31)  # end of first month
+    assert points[-1] == end               # last point capped at end
+    assert len(points) == 6
+
+
+def test_date_points_monthly_end_of_month_snapshots():
+    """Monthly points: one EOM snapshot per month, last one capped at end."""
+    start = date(2025, 1, 1)
+    end = date(2025, 4, 15)
+    points = _date_points(start, end, "monthly")
+    assert points == [
+        date(2025, 1, 31),  # end of Jan
+        date(2025, 2, 28),  # end of Feb
+        date(2025, 3, 31),  # end of Mar
+        date(2025, 4, 15),  # capped at end (Apr 30 → Apr 15)
+    ]
+
+
+def test_date_points_monthly_december_start():
+    """December start must not crash with month rollover."""
+    start = date(2024, 12, 1)
+    end = date(2025, 2, 15)
+    points = _date_points(start, end, "monthly")
+    assert points == [
+        date(2024, 12, 31),
+        date(2025, 1, 31),
+        date(2025, 2, 15),
+    ]
+
+
+def test_date_points_monthly_feb_leap_year():
+    """End-of-month for February respects leap years."""
+    start = date(2024, 1, 1)
+    end = date(2024, 3, 1)
+    points = _date_points(start, end, "monthly")
+    assert points == [
+        date(2024, 1, 31),
+        date(2024, 2, 29),
+        date(2024, 3, 1),
+    ]
 
 
 def test_date_points_yearly():
@@ -108,14 +145,16 @@ def test_date_points_unknown_interval_defaults_to_monthly():
 
 
 def test_date_points_last_point_replaces_same_period():
-    """When end falls in the same period as the last generated point, replace it."""
+    """End date mid-month caps the last snapshot; no duplicate month labels."""
     start = date(2025, 1, 1)
     end = date(2025, 3, 15)
     points = _date_points(start, end, "monthly")
-    # March 1 and March 15 share "2025-03" label, so March 15 replaces March 1
-    assert points[-1] == end
+    assert points == [
+        date(2025, 1, 31),
+        date(2025, 2, 28),
+        date(2025, 3, 15),  # Mar 31 capped at end
+    ]
     labels = [_format_date_label(p, "monthly") for p in points]
-    # No duplicates
     assert len(labels) == len(set(labels))
 
 
@@ -1362,8 +1401,8 @@ async def test_cash_flow_api_default_params(client, auth_headers, test_transacti
     assert resp.status_code == 200
     data = resp.json()
     assert data["meta"]["interval"] == "daily"
-    # 6 months * ~30 days = ~180 trend points
-    assert 150 <= len(data["trend"]) <= 200
+    # 1 month past + 6 months forward * ~30 days = ~210 trend points
+    assert 180 <= len(data["trend"]) <= 230
 
 
 @pytest.mark.asyncio
@@ -2065,3 +2104,220 @@ async def test_cash_flow_running_balance_arithmetic(
         assert abs(pt.value - expected) < 0.01, (
             f"Day {d}: got {pt.value}, expected {expected}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Baseline mode (historical-mean forecast) — issue #179
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_baseline_off_uses_recurring(
+    session: AsyncSession, test_user: User
+):
+    """baseline=False is the legacy behavior: only recurring rules project."""
+    account = await _make_manual_account(session, test_user.id, "CF Baseline Off")
+    await _add_txn(
+        session, test_user.id, account.id, 5000, "credit",
+        date.today(), source="opening_balance",
+    )
+    today = date.today()
+    # 30 days of past actuals that baseline mode would otherwise pick up.
+    for offset in range(1, 31):
+        await _add_txn(
+            session, test_user.id, account.id, 100, "debit",
+            today - timedelta(days=offset),
+        )
+    # One recurring rule.
+    await _make_recurring(
+        session, test_user.id, account.id,
+        amount=1500, txn_type="credit", frequency="monthly",
+        next_occurrence=today + timedelta(days=2),
+    )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily", baseline=False,
+    )
+
+    assert report.meta.baseline_active is False
+    assert report.meta.baseline_lookback_days is None
+    proj_income = next(b for b in report.summary.breakdowns if b.key == "projectedIncome")
+    proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
+    # Recurring credit fires; past debits do NOT project forward.
+    assert proj_income.value >= 1500.0
+    assert proj_exp.value == 0.0
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_baseline_on_replaces_recurring_with_mean(
+    session: AsyncSession, test_user: User
+):
+    """baseline=True ignores recurring rules and projects from historical mean.
+
+    Setup: 30 days × R$100 debits in the past (no income, no recurring
+    debits set up). Baseline should pick those up and project them forward.
+    """
+    account = await _make_manual_account(session, test_user.id, "CF Baseline On")
+    await _add_txn(
+        session, test_user.id, account.id, 5000, "credit",
+        date.today(), source="opening_balance",
+    )
+    today = date.today()
+    # Past actuals: 30 daily R$100 debits → total R$3000 over the lookback.
+    for offset in range(1, 31):
+        await _add_txn(
+            session, test_user.id, account.id, 100, "debit",
+            today - timedelta(days=offset),
+        )
+    # A recurring credit rule that baseline mode should IGNORE.
+    await _make_recurring(
+        session, test_user.id, account.id,
+        amount=9999, txn_type="credit", frequency="monthly",
+        next_occurrence=today + timedelta(days=2),
+    )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily", baseline=True,
+    )
+
+    assert report.meta.baseline_active is True
+    # Lookback window = 30 days of past data (capped by earliest tx, not by
+    # the 12-month maximum).
+    assert report.meta.baseline_lookback_days == 30
+    proj_income = next(b for b in report.summary.breakdowns if b.key == "projectedIncome")
+    proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
+    # Recurring R$9999 credit should NOT appear (baseline replaces recurring).
+    assert proj_income.value < 100.0
+    # Outflow should reflect ~R$100/day × 3 months ≈ R$9000.
+    assert proj_exp.value > 8000.0
+    assert proj_exp.value < 10000.0
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_baseline_lookback_caps_at_twelve_months(
+    session: AsyncSession, test_user: User
+):
+    """User with >12 months of history sees lookback capped at 365 days."""
+    account = await _make_manual_account(session, test_user.id, "CF Baseline Cap")
+    await _add_txn(
+        session, test_user.id, account.id, 5000, "credit",
+        date.today(), source="opening_balance",
+    )
+    today = date.today()
+    # Single very old transaction (18 months ago) plus one recent one.
+    await _add_txn(
+        session, test_user.id, account.id, 50, "debit",
+        today - timedelta(days=540),
+    )
+    await _add_txn(
+        session, test_user.id, account.id, 50, "debit",
+        today - timedelta(days=10),
+    )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily", baseline=True,
+    )
+
+    # Window is bounded by `today - 365 days`, not by the 540-days-ago tx.
+    # Allow ±2-day tolerance for month-arithmetic edge cases.
+    assert report.meta.baseline_lookback_days is not None
+    assert 363 <= report.meta.baseline_lookback_days <= 367
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_baseline_lookback_adapts_to_short_history(
+    session: AsyncSession, test_user: User
+):
+    """User with only N days of history sees lookback shrink to N."""
+    account = await _make_manual_account(session, test_user.id, "CF Baseline Short")
+    await _add_txn(
+        session, test_user.id, account.id, 1000, "credit",
+        date.today(), source="opening_balance",
+    )
+    today = date.today()
+    # Just 7 days of activity.
+    for offset in range(1, 8):
+        await _add_txn(
+            session, test_user.id, account.id, 20, "debit",
+            today - timedelta(days=offset),
+        )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily", baseline=True,
+    )
+
+    # Earliest tx is 7 days ago, so lookback is 7 days.
+    assert report.meta.baseline_lookback_days == 7
+    proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
+    # 7 days × R$20 = R$140 over 7 days → R$20/day → ~R$1820 over ~91 days.
+    assert proj_exp.value > 1500.0
+    assert proj_exp.value < 2200.0
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_baseline_no_history_returns_empty_projection(
+    session: AsyncSession, test_user: User
+):
+    """User with no qualifying transactions → baseline contributes zero.
+
+    Chart should still show starting balance flat across the forecast.
+    """
+    account = await _make_manual_account(session, test_user.id, "CF Baseline Empty")
+    await _add_txn(
+        session, test_user.id, account.id, 2000, "credit",
+        date.today(), source="opening_balance",
+    )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily", baseline=True,
+    )
+
+    assert report.meta.baseline_active is True
+    assert report.meta.baseline_lookback_days == 0
+    proj_income = next(b for b in report.summary.breakdowns if b.key == "projectedIncome")
+    proj_exp = next(b for b in report.summary.breakdowns if b.key == "projectedExpenses")
+    assert proj_income.value == 0.0
+    assert proj_exp.value == 0.0
+    # Ending balance equals starting (flat line).
+    assert report.summary.change_amount == 0.0
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_meta_carries_forecast_start_date(
+    session: AsyncSession, test_user: User
+):
+    """forecast_start_date in meta lets the UI split solid vs dashed at today."""
+    account = await _make_manual_account(session, test_user.id, "CF Forecast Start")
+    await _add_txn(
+        session, test_user.id, account.id, 100, "credit",
+        date.today(), source="opening_balance",
+    )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily",
+    )
+
+    assert report.meta.forecast_start_date == date.today().isoformat()
+
+
+@pytest.mark.asyncio
+async def test_cash_flow_chart_includes_past_history(
+    session: AsyncSession, test_user: User
+):
+    """Trend starts ~1 month before today so the today-marker has context."""
+    account = await _make_manual_account(session, test_user.id, "CF Past")
+    await _add_txn(
+        session, test_user.id, account.id, 500, "credit",
+        date.today(), source="opening_balance",
+    )
+
+    report = await get_cash_flow_report(
+        session, test_user.id, months=3, interval="daily",
+    )
+
+    # First trend point should be ~30 days before today.
+    first_date = date.fromisoformat(report.trend[0].date)
+    today = date.today()
+    delta_days = (today - first_date).days
+    # _PAST_HISTORY_MONTHS = 1 (28–31 days depending on month).
+    assert 27 <= delta_days <= 32

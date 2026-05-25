@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/endpoint?url=https://gist.githubusercontent.com/tassionoronha/ae627b744aaa2ba89d850ea541c311be/raw/coverage.json" alt="Coverage" />
   <a href="https://www.gnu.org/licenses/agpl-3.0"><img src="https://img.shields.io/badge/License-AGPL--3.0-blue.svg" alt="License: AGPL-3.0" /></a>
   <br />
-  <a href="https://usesecuro.com/">Website</a> · <a href="https://docs.usesecuro.com/">Docs</a> · <a href="https://github.com/orgs/securo-finance/projects/2">Roadmap</a>
+  <a href="https://usesecuro.com/">Website</a> · <a href="https://demo.usesecuro.com/">Try our Demo</a> · <a href="https://docs.usesecuro.com/">Read the Docs</a>
 </p>
 
 <h3 align="center">Finance apps want your data. This one doesn't.</h3>
@@ -47,12 +47,11 @@ Open [http://localhost:3000](http://localhost:3000) and create an account. That'
 - Goals and savings targets with progress tracking
 - Asset management with valuation tracking and growth rules
 - Reports: Net Worth and Income vs Expenses with category sparklines
-- Dashboard with spending analytics and projections
 - Bank sync via providers (Pluggy supported, extensible)
 - Multi-currency support with automatic FX conversion
 - Multi-user support with admin panel and registration controls
 - Two-factor authentication (TOTP) with brute-force protection
-- Dark/light theme, multi-language support, privacy mode
+- AI Agents (optional): self-hosted LLM chat with tool-use over your data, plus a per-agent RAG knowledge base
 
 ## Bank Sync (Optional)
 
@@ -74,6 +73,19 @@ OPENEXCHANGERATES_APP_ID=your-app-id
 ```
 
 Rates are fetched on-demand when foreign-currency transactions are created. Without a key, cross-currency amounts default to a 1:1 fallback rate with a visual warning.
+
+## AI Agents (Optional)
+
+Self-hosted AI assistants over your Securo data — multi-provider (OpenAI, Anthropic, Ollama, OpenAI-compatible), tool-use via MCP, per-agent RAG knowledge base, ⌘J global chat panel.
+
+Add to `.env`:
+
+```
+AGENTS_ENABLED=true
+COMPOSE_PROFILES=agents
+```
+
+Then `docker compose up -d`. Settings → AI Agents to add a provider connection. Off by default; zero cost when off.
 
 ## Tech Stack
 
