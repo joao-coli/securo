@@ -9,6 +9,8 @@ Thanks for your interest in contributing to Securo! This guide will help you get
 3. Start the stack: `docker compose up --build`
 4. Open [http://localhost:3000](http://localhost:3000)
 
+If you maintain a long-lived branch that merges `securo-finance/securo` `main` regularly, read [docs/fork-upstream-merge.md](docs/fork-upstream-merge.md) (Docker rebuilds, migration numbering, DB recovery).
+
 ## Development Workflow
 
 1. Create a branch from `main`: `git checkout -b feature/your-feature`

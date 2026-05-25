@@ -1,7 +1,7 @@
 """recurring transaction funding domain
 
-Revision ID: 048
-Revises: 047
+Revision ID: 054
+Revises: 053
 Create Date: 2026-05-09
 """
 
@@ -11,13 +11,16 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "048"
-down_revision: Union[str, None] = "047"
+revision: str = "054"
+down_revision: Union[str, None] = "053"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    cols = {c["name"] for c in sa.inspect(op.get_bind()).get_columns("recurring_transactions")}
+    if "funding_domain_id" in cols:
+        return
     op.add_column(
         "recurring_transactions",
         sa.Column("funding_domain_id", UUID(as_uuid=True), sa.ForeignKey("funding_domains.id"), nullable=True),

@@ -110,6 +110,8 @@ docker compose exec backend pytest
 docker compose up --build
 ```
 
+**Forking and merging upstream?** See [docs/fork-upstream-merge.md](docs/fork-upstream-merge.md) for remotes, conflict patterns, Docker rebuilds (`pgvector`, frontend `node_modules` volume), and Alembic recovery when revision numbers overlapped.
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
