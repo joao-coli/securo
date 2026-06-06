@@ -1,7 +1,7 @@
 """credit-card payment allocations
 
-Revision ID: 053
-Revises: 052
+Revision ID: 056
+Revises: 055
 Create Date: 2026-05-05
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "053"
-down_revision: Union[str, None] = "052"
+revision: str = "056"
+down_revision: Union[str, None] = "055"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

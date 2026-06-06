@@ -85,7 +85,7 @@ INFO:     Application startup complete.
 
 ## Database migrations on a fork
 
-Upstream and a fork must not use the **same Alembic revision numbers** for different changes. After merging upstream, fork-only migrations should chain **after** upstream’s current head (for example `051` → fork `052`–`055`), not reuse `046`–`049` if upstream already owns those ids.
+Upstream and a fork must not use the **same Alembic revision numbers** for different changes. After merging upstream, fork-only migrations should chain **after** upstream’s current head. Revision numbers collide easily — upstream added `052`–`054` (workspaces) after our fork had already used `052`–`055` (funding domains). Funding migrations now live at **`055`–`058`** (after upstream `054`).
 
 Check the graph:
 
@@ -117,13 +117,15 @@ docker compose run --rm backend sh -c "alembic stamp 045 && alembic upgrade head
 What this does:
 
 1. **`stamp 045`** — tells Alembic to treat the DB as at revision `045` (last shared revision before the collision).
-2. **`upgrade head`** — applies upstream `046`–`051` (agents, `is_ignored`, bank connection display name), then fork `052`–`055` (funding domains). Fork migrations `052`–`055` are **idempotent**: they skip tables/columns/indexes that already exist.
+2. **`upgrade head`** — applies any missing upstream revisions, then fork `055`–`058` (funding domains). Fork funding migrations are **idempotent**: they skip tables/columns/indexes that already exist.
+
+If upstream added workspace migrations (`052`–`054`) since your last merge, a normal `alembic upgrade head` is usually enough — funding migrations were renumbered to follow `054`.
 
 Confirm:
 
 ```bash
 docker compose run --rm backend alembic current
-# 055 (head)
+# 058 (head)
 ```
 
 **Do not** use `stamp 045` on a database that never had fork funding migrations — use `alembic upgrade head` only.

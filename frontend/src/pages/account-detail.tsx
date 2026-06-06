@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useParams, Link } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query'
 import { format, addDays, addMonths, parseISO } from 'date-fns'
 import { ptBR, enUS } from 'date-fns/locale'
@@ -23,6 +24,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/contexts/workspace-context'
 import {
   AreaChart,
   Area,
@@ -232,13 +234,14 @@ function formatDateStr(dateStr: string, locale = 'pt-BR') {
   return new Date(dateStr + 'T00:00:00').toLocaleDateString(locale)
 }
 
-function formatFriendlyDate(dateStr: string, i18nLanguage: string) {
-  const dateFnsLocale = i18nLanguage === 'pt-BR' ? ptBR : enUS
-  const d = parseISO(dateStr + 'T00:00:00')
-  // Compact friendly format: pt-BR → "qui, 16 abr" / en → "Thu, Apr 16"
-  return i18nLanguage === 'pt-BR'
-    ? format(d, 'EEE, d MMM', { locale: dateFnsLocale })
-    : format(d, 'EEE, MMM d', { locale: dateFnsLocale })
+function formatFriendlyDate(dateStr: string, dateLocale: string) {
+  // Compact friendly weekday+day+month — words follow the UI language, field
+  // order follows the regional date setting (e.g. "Thu, Apr 16" vs "Thu, 16 Apr").
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString(dateLocale, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  })
 }
 
 function daysUntil(dateStr: string): number {
@@ -262,8 +265,10 @@ export default function AccountDetailPage() {
   const { t, i18n } = useTranslation()
   const { mask, privacyMode, MASK } = usePrivacyMode()
   const { user } = useAuth()
+  const { canWrite } = useWorkspace()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
-  const locale = i18n.language === 'en' ? 'en-US' : i18n.language
+  const locale = useDisplayLocale()
+  const dateLocale = useDateLocale()
   const queryClient = useQueryClient()
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editingTx, setEditingTx] = useState<Transaction | null>(null)
@@ -783,25 +788,25 @@ export default function AccountDetailPage() {
       const startDate = parseISO(rangeStart + 'T00:00:00')
       const baseline = new Date(startDate.getTime() - 86400000)
       const baselineKey = format(baseline, 'yyyy-MM-dd')
-      series.push({ label: formatDateStr(baselineKey, locale), date: baselineKey, balance: 0 })
+      series.push({ label: formatDateStr(baselineKey, dateLocale), date: baselineKey, balance: 0 })
       const cur = new Date(startDate)
       const end = new Date(rangeEnd + 'T00:00:00')
       let running = 0
       while (cur <= end) {
         const key = format(cur, 'yyyy-MM-dd')
         running += byDay.get(key) ?? 0
-        series.push({ label: formatDateStr(key, locale), date: key, balance: running })
+        series.push({ label: formatDateStr(key, dateLocale), date: key, balance: running })
         cur.setDate(cur.getDate() + 1)
       }
       return series
     }
     if (!balanceHistory) return []
     return balanceHistory.map(p => ({
-      label: formatDateStr(p.date, locale),
+      label: formatDateStr(p.date, dateLocale),
       date: p.date,
       balance: usePrimary ? (p.balance_primary ?? p.balance) : p.balance,
     }))
-  }, [isCreditCard, txData, filterFrom, filterTo, balanceHistory, locale, usePrimary, activeBill])
+  }, [isCreditCard, txData, filterFrom, filterTo, balanceHistory, locale, dateLocale, usePrimary, activeBill])
 
   // Running balance computation for transaction table
   const txWithRunningBalance = useMemo((): TxWithBalance[] => {
@@ -917,7 +922,7 @@ export default function AccountDetailPage() {
                   </>
                 )
               })()}
-              {isCreditCard && (!account.statement_close_day || !account.payment_due_day) && (
+              {isCreditCard && canWrite && (!account.statement_close_day || !account.payment_due_day) && (
                 <>
                   <span className="text-muted-foreground text-xs">·</span>
                   <button
@@ -933,7 +938,7 @@ export default function AccountDetailPage() {
               )}
             </div>
           </div>
-          {!account.is_closed && (
+          {!account.is_closed && canWrite && (
             <Button
               variant="outline"
               size="sm"
@@ -1064,14 +1069,16 @@ export default function AccountDetailPage() {
       {account.is_closed && (
         <div className="flex items-center justify-between rounded-lg border border-border bg-muted px-4 py-3 mb-6">
           <span className="text-sm text-muted-foreground">{t('accounts.closedBanner')}</span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => reopenMutation.mutate()}
-            disabled={reopenMutation.isPending}
-          >
-            {t('accounts.reopen')}
-          </Button>
+          {canWrite && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => reopenMutation.mutate()}
+              disabled={reopenMutation.isPending}
+            >
+              {t('accounts.reopen')}
+            </Button>
+          )}
         </div>
       )}
 
@@ -1235,7 +1242,7 @@ export default function AccountDetailPage() {
                 {t('accounts.dueDate')}
               </p>
               <p className="text-base sm:text-2xl font-bold tabular-nums text-foreground">
-                {cycleDueDate ? formatFriendlyDate(cycleDueDate, i18n.language) : '—'}
+                {cycleDueDate ? formatFriendlyDate(cycleDueDate, dateLocale) : '—'}
               </p>
               {dueSubtitle && (
                 <p className={`text-[10px] sm:text-xs font-medium mt-0.5 ${dueSubtitleClass}`}>
@@ -1313,14 +1320,16 @@ export default function AccountDetailPage() {
                   </p>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={() => setCcSettingsOpen(true)}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-                title={t('common.edit')}
-              >
-                <Pencil size={13} />
-              </button>
+              {canWrite && (
+                <button
+                  type="button"
+                  onClick={() => setCcSettingsOpen(true)}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                  title={t('common.edit')}
+                >
+                  <Pencil size={13} />
+                </button>
+              )}
             </div>
             {limit != null && pct != null && rawPct != null && (
               <>
@@ -1362,9 +1371,9 @@ export default function AccountDetailPage() {
                 </p>
                 <p className="text-sm sm:text-base font-semibold tabular-nums text-foreground">
                   {activeBill
-                    ? formatDateStr(closeDateForBill(activeBill.due_date, account.statement_close_day), locale)
+                    ? formatDateStr(closeDateForBill(activeBill.due_date, account.statement_close_day), dateLocale)
                     : (account.statement_close_day && filterTo
-                        ? formatDateStr(format(addDays(parseISO(filterTo), 1), 'yyyy-MM-dd'), locale)
+                        ? formatDateStr(format(addDays(parseISO(filterTo), 1), 'yyyy-MM-dd'), dateLocale)
                         : '—')}
                 </p>
               </div>
@@ -1713,9 +1722,9 @@ export default function AccountDetailPage() {
                     return (
                       <tr
                         key={tx.id}
-                        className={`border-b last:border-0 transition-colors ${isOpening ? 'bg-muted/60' : isPending ? 'opacity-60' : 'hover:bg-muted cursor-pointer'}`}
+                        className={`border-b last:border-0 transition-colors ${isOpening ? 'bg-muted/60' : isPending ? 'opacity-60' : canWrite ? 'hover:bg-muted cursor-pointer' : ''}`}
                         onClick={() => {
-                          if (!isOpening) {
+                          if (!isOpening && canWrite) {
                             setEditingTx(tx)
                             setDialogOpen(true)
                           }
@@ -1746,7 +1755,7 @@ export default function AccountDetailPage() {
                           </td>
                         )}
                         <td className="px-3 sm:px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                          {formatDateStr(tx.date, locale)}
+                          {formatDateStr(tx.date, dateLocale)}
                         </td>
                         <td className="px-3 sm:px-4 py-3">
                           <div>
@@ -1789,10 +1798,10 @@ export default function AccountDetailPage() {
                             {tx.effective_bill_date && (
                               <span
                                 className="ml-2 inline-flex items-center gap-1 text-xs text-violet-600 dark:text-violet-400 font-normal bg-violet-50 dark:bg-violet-500/10 border border-violet-200 dark:border-violet-500/30 rounded px-1.5 py-0.5"
-                                title={t('transactions.billOverrideTooltip', 'Movida para a fatura com vencimento em {{date}}', { date: formatDateStr(tx.effective_bill_date, locale) })}
+                                title={t('transactions.billOverrideTooltip', 'Movida para a fatura com vencimento em {{date}}', { date: formatDateStr(tx.effective_bill_date, dateLocale) })}
                               >
                                 <CalendarClock className="h-3 w-3" />
-                                {formatDateStr(tx.effective_bill_date, locale)}
+                                {formatDateStr(tx.effective_bill_date, dateLocale)}
                               </span>
                             )}
                             {(tx.attachment_count ?? 0) > 0 && (

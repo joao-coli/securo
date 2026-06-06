@@ -1,5 +1,6 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
+import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { assets, assetGroups, currencies as currenciesApi } from '@/lib/api'
@@ -50,6 +51,7 @@ import {
 import { PageHeader } from '@/components/page-header'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
+import { useWorkspace } from '@/contexts/workspace-context'
 
 function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
   try {
@@ -168,10 +170,12 @@ const GROWTH_TYPES = ['percentage', 'absolute'] as const
 const GROWTH_FREQUENCIES = ['daily', 'weekly', 'monthly', 'yearly'] as const
 
 export default function AssetsPage() {
-  const { t, i18n } = useTranslation()
-  const locale = i18n.language === 'en' ? 'en-US' : i18n.language
+  const { t } = useTranslation()
+  const locale = useDisplayLocale()
+  const dateLocale = useDateLocale()
   const { mask } = usePrivacyMode()
   const { user } = useAuth()
+  const { canWrite } = useWorkspace()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const queryClient = useQueryClient()
 
@@ -664,7 +668,7 @@ export default function AssetsPage() {
               ) : null}
               {asset.maturity_date && (
                 <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-muted-foreground">
-                  {t('assets.maturesOn', { date: new Date(asset.maturity_date).toLocaleDateString(locale) })}
+                  {t('assets.maturesOn', { date: new Date(asset.maturity_date).toLocaleDateString(dateLocale) })}
                 </Badge>
               )}
               {asset.valuation_method === 'growth_rule' && asset.growth_rate && (
@@ -707,34 +711,38 @@ export default function AssetsPage() {
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            <button
-              onClick={(e) => { e.stopPropagation(); setMovingAsset(asset) }}
-              title={t('assets.moveToWallet')}
-              className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            >
-              <FolderInput size={14} />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) openEdit(asset) }}
-              disabled={isProviderOwned}
-              title={isProviderOwned ? t('assets.syncedReadOnly') : undefined}
-              className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) setDeletingId(asset.id) }}
-              disabled={isProviderOwned}
-              title={isProviderOwned ? t('assets.syncedReadOnly') : undefined}
-              className="p-1.5 rounded-lg text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
-            >
-              <Trash2 size={14} />
-            </button>
+            {canWrite && (
+              <>
+                <button
+                  onClick={(e) => { e.stopPropagation(); setMovingAsset(asset) }}
+                  title={t('assets.moveToWallet')}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                >
+                  <FolderInput size={14} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) openEdit(asset) }}
+                  disabled={isProviderOwned}
+                  title={isProviderOwned ? t('assets.syncedReadOnly') : undefined}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  <Pencil size={14} />
+                </button>
+                <button
+                  onClick={(e) => { e.stopPropagation(); if (!isProviderOwned) setDeletingId(asset.id) }}
+                  disabled={isProviderOwned}
+                  title={isProviderOwned ? t('assets.syncedReadOnly') : undefined}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </>
+            )}
             {isExpanded ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
           </div>
         </div>
 
-        {isExpanded && <AssetDetail assetId={asset.id} currency={asset.currency} locale={locale} purchasePrice={asset.purchase_price} purchaseDate={asset.purchase_date} valuationMethod={asset.valuation_method} />}
+        {isExpanded && <AssetDetail assetId={asset.id} currency={asset.currency} locale={locale} dateLocale={dateLocale} purchasePrice={asset.purchase_price} purchaseDate={asset.purchase_date} valuationMethod={asset.valuation_method} canWrite={canWrite} />}
       </div>
     )
   }
@@ -841,21 +849,25 @@ export default function AssetsPage() {
           <span className="text-sm font-bold tabular-nums text-foreground shrink-0">
             {mask(formatCurrency(total, userCurrency, locale))}
           </span>
-          <button
-            onClick={() => openEditWallet(wallet)}
-            className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
-            title={t('assets.editWallet')}
-          >
-            <Pencil size={12} />
-          </button>
-          {!isSynced && (
-            <button
-              onClick={() => setDeletingWalletId(wallet.id)}
-              className="p-1 rounded-lg text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors"
-              title={t('assets.deleteWallet')}
-            >
-              <Trash2 size={12} />
-            </button>
+          {canWrite && (
+            <>
+              <button
+                onClick={() => openEditWallet(wallet)}
+                className="p-1 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+                title={t('assets.editWallet')}
+              >
+                <Pencil size={12} />
+              </button>
+              {!isSynced && (
+                <button
+                  onClick={() => setDeletingWalletId(wallet.id)}
+                  className="p-1 rounded-lg text-muted-foreground hover:text-rose-600 hover:bg-rose-50 transition-colors"
+                  title={t('assets.deleteWallet')}
+                >
+                  <Trash2 size={12} />
+                </button>
+              )}
+            </>
           )}
         </div>
         {!isCollapsed && walletAssets.length > 0 && (
@@ -878,16 +890,18 @@ export default function AssetsPage() {
         section={t('assets.title')}
         title={t('assets.title')}
         action={
-          <div className="flex items-center gap-2">
-            <Button onClick={openCreateWallet} variant="outline" className="gap-1.5">
-              <Wallet size={16} />
-              {t('assets.newWallet')}
-            </Button>
-            <Button onClick={openCreate} className="gap-1.5">
-              <Plus size={16} />
-              {t('assets.addAsset')}
-            </Button>
-          </div>
+          canWrite ? (
+            <div className="flex items-center gap-2">
+              <Button onClick={openCreateWallet} variant="outline" className="gap-1.5">
+                <Wallet size={16} />
+                {t('assets.newWallet')}
+              </Button>
+              <Button onClick={openCreate} className="gap-1.5">
+                <Plus size={16} />
+                {t('assets.addAsset')}
+              </Button>
+            </div>
+          ) : undefined
         }
       />
 
@@ -898,6 +912,7 @@ export default function AssetsPage() {
           wallets={sortedWallets}
           currency={userCurrency}
           locale={locale}
+          dateLocale={dateLocale}
           mask={mask}
         />
       )}
@@ -1110,7 +1125,7 @@ export default function AssetsPage() {
                             during create because the quote is inline-live. */}
                         {editingAsset?.last_price_at && (
                           <span className="text-[10px] text-muted-foreground mt-0.5">
-                            {t('assets.lastUpdated', { when: formatRelativeTime(editingAsset.last_price_at, locale) })}
+                            {t('assets.lastUpdated', { when: formatRelativeTime(editingAsset.last_price_at, dateLocale) })}
                           </span>
                         )}
                       </div>
@@ -1469,11 +1484,12 @@ export default function AssetsPage() {
 
 const PORTFOLIO_COLORS = ['#6366F1', '#F43F5E', '#F59E0B', '#10B981', '#8B5CF6', '#EC4899', '#06B6D4', '#84CC16']
 
-function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
+function PortfolioChart({ data, wallets, currency, locale: loc, dateLocale: dateLoc, mask }: {
   data: { assets: { id: string; name: string; type: string; group_id: string | null }[]; trend: Record<string, unknown>[]; total: number }
   wallets: AssetGroup[]
   currency: string
   locale: string
+  dateLocale: string
   mask: (v: string) => string
 }) {
   const { t } = useTranslation()
@@ -1615,7 +1631,7 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
               tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
               axisLine={false}
               tickLine={false}
-              tickFormatter={(v: string) => new Date(v + 'T00:00:00').toLocaleDateString(loc, { month: 'short', year: '2-digit' })}
+              tickFormatter={(v: string) => new Date(v + 'T00:00:00').toLocaleDateString(dateLoc, { month: 'short', year: '2-digit' })}
             />
             <YAxis
               tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
@@ -1639,7 +1655,7 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
                 return (
                   <div style={{ background: 'var(--card)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: '0.75rem', fontSize: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.08)', padding: '10px 12px' }}>
                     <p style={{ fontWeight: 600, marginBottom: 6 }}>
-                      {new Date(label + 'T00:00:00').toLocaleDateString(loc, { day: 'numeric', month: 'long', year: 'numeric' })}
+                      {new Date(label + 'T00:00:00').toLocaleDateString(dateLoc, { day: 'numeric', month: 'long', year: 'numeric' })}
                     </p>
                     {items.map(item => (
                       <div key={item.key} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, marginBottom: 2 }}>
@@ -1690,10 +1706,11 @@ function PortfolioChart({ data, wallets, currency, locale: loc, mask }: {
   )
 }
 
-function AssetDetail({ assetId, currency, locale: loc, purchasePrice, purchaseDate, valuationMethod }: {
-  assetId: string; currency: string; locale: string
+function AssetDetail({ assetId, currency, locale: loc, dateLocale: dateLoc, purchasePrice, purchaseDate, valuationMethod, canWrite }: {
+  assetId: string; currency: string; locale: string; dateLocale: string
   purchasePrice: number | null; purchaseDate: string | null
   valuationMethod: string
+  canWrite: boolean
 }) {
   const { t } = useTranslation()
   const { mask } = usePrivacyMode()
@@ -1798,7 +1815,7 @@ function AssetDetail({ assetId, currency, locale: loc, purchasePrice, purchaseDa
                   tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
                   axisLine={false}
                   tickLine={false}
-                  tickFormatter={(v: string) => new Date(v + 'T00:00:00').toLocaleDateString(loc, { month: 'short', year: '2-digit' })}
+                  tickFormatter={(v: string) => new Date(v + 'T00:00:00').toLocaleDateString(dateLoc, { month: 'short', year: '2-digit' })}
                 />
                 <YAxis
                   tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
@@ -1817,7 +1834,7 @@ function AssetDetail({ assetId, currency, locale: loc, purchasePrice, purchaseDa
                 />
                 <RechartsTooltip
                   formatter={(value: number | undefined) => [mask(formatCurrency(value ?? 0, currency, loc)), t('assets.currentValue')]}
-                  labelFormatter={(label: unknown) => new Date(String(label) + 'T00:00:00').toLocaleDateString(loc, { day: 'numeric', month: 'long', year: 'numeric' })}
+                  labelFormatter={(label: unknown) => new Date(String(label) + 'T00:00:00').toLocaleDateString(dateLoc, { day: 'numeric', month: 'long', year: 'numeric' })}
                   contentStyle={{
                     background: 'var(--card)',
                     color: 'var(--foreground)',
@@ -1843,7 +1860,7 @@ function AssetDetail({ assetId, currency, locale: loc, purchasePrice, purchaseDa
       )}
 
       {/* Add Value Form — only for manual assets */}
-      {valuationMethod === 'manual' && <div className="flex items-end gap-2">
+      {valuationMethod === 'manual' && canWrite && <div className="flex items-end gap-2">
         <div className="flex-1">
           <Label className="text-[11px] text-muted-foreground">{t('assets.amount')}</Label>
           <Input
@@ -1910,9 +1927,9 @@ function AssetDetail({ assetId, currency, locale: loc, purchasePrice, purchaseDa
                       {t(`assets.source${v.source.charAt(0).toUpperCase() + v.source.slice(1)}`)}
                     </Badge>
                     <span className="text-[11px] text-muted-foreground tabular-nums">
-                      {new Date(v.date + 'T00:00:00').toLocaleDateString(loc)}
+                      {new Date(v.date + 'T00:00:00').toLocaleDateString(dateLoc)}
                     </span>
-                    {valuationMethod === 'manual' && v.source === 'manual' && (
+                    {valuationMethod === 'manual' && v.source === 'manual' && canWrite && (
                       <button
                         onClick={() => deleteValueMutation.mutate(v.id)}
                         className="p-1 rounded text-muted-foreground/40 hover:text-rose-600 transition-colors"

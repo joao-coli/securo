@@ -1,4 +1,5 @@
 import axios from 'axios'
+import type { NumberFormat, DateFormat } from '@/lib/format'
 import type {
   User,
   AdminUser,
@@ -29,6 +30,9 @@ import type {
   Rule,
   ImportLog,
   ImportPreviewTransaction,
+  Workspace,
+  WorkspaceMember,
+  WorkspaceRole,
   Asset,
   AssetGroup,
   AssetValue,
@@ -55,11 +59,20 @@ const api = axios.create({
   baseURL: '/api',
 })
 
-// Add auth token to requests
+// Storage key for the currently-selected workspace ID. Lives in
+// localStorage so reloads + new tabs stay on the same workspace until
+// the user picks another one.
+export const WORKSPACE_STORAGE_KEY = 'workspace_id'
+
+// Add auth token + active workspace header to requests
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token')
   if (token) {
     config.headers.Authorization = `Bearer ${token}`
+  }
+  const workspaceId = localStorage.getItem(WORKSPACE_STORAGE_KEY)
+  if (workspaceId) {
+    config.headers['X-Workspace-Id'] = workspaceId
   }
   return config
 })
@@ -75,6 +88,57 @@ api.interceptors.response.use(
     return Promise.reject(error)
   }
 )
+
+// Workspaces
+export const workspaces = {
+  list: async (): Promise<Workspace[]> => {
+    const { data } = await api.get('/workspaces')
+    return data
+  },
+  current: async (): Promise<Workspace> => {
+    const { data } = await api.get('/workspaces/current')
+    return data
+  },
+  create: async (payload: {
+    name: string
+    kind?: string
+    default_currency?: string
+    locale?: string
+    icon?: string
+    color?: string
+    self_membership?: boolean
+  }): Promise<Workspace> => {
+    const { data } = await api.post('/workspaces', payload)
+    return data
+  },
+  update: async (id: string, payload: Partial<Pick<Workspace, 'name' | 'icon' | 'color' | 'default_currency' | 'locale'>>): Promise<Workspace> => {
+    const { data } = await api.patch(`/workspaces/${id}`, payload)
+    return data
+  },
+  listMembers: async (id: string): Promise<WorkspaceMember[]> => {
+    const { data } = await api.get(`/workspaces/${id}/members`)
+    return data
+  },
+  invite: async (id: string, payload: { email: string; role?: WorkspaceRole; password?: string }): Promise<WorkspaceMember> => {
+    const { data } = await api.post(`/workspaces/${id}/members`, payload)
+    return data
+  },
+  changeRole: async (id: string, memberUserId: string, role: WorkspaceRole): Promise<WorkspaceMember> => {
+    const { data } = await api.patch(`/workspaces/${id}/members/${memberUserId}`, { role })
+    return data
+  },
+  removeMember: async (id: string, memberUserId: string): Promise<void> => {
+    await api.delete(`/workspaces/${id}/members/${memberUserId}`)
+  },
+  stats: async (id: string): Promise<{ members: number; accounts: number; transactions: number }> => {
+    const { data } = await api.get(`/workspaces/${id}/stats`)
+    return data
+  },
+  archive: async (id: string): Promise<Workspace> => {
+    const { data } = await api.post(`/workspaces/${id}/archive`)
+    return data
+  },
+}
 
 // Setup
 export const setup = {
@@ -194,7 +258,7 @@ export const connections = {
     const { data } = await api.get('/connections')
     return data
   },
-  getProviders: async (): Promise<{ name: string; display_name: string; description: string; flow_type: string; configured: boolean }[]> => {
+  getProviders: async (): Promise<{ name: string; display_name: string; description: string; flow_type: string; configured: boolean; requires_institution_select?: boolean }[]> => {
     const { data } = await api.get('/connections/providers')
     return data.providers
   },
@@ -202,13 +266,38 @@ export const connections = {
     const { data } = await api.post('/connections/connect-token', { provider })
     return data.access_token
   },
-  getOAuthUrl: async (provider: string): Promise<string> => {
-    const { data } = await api.post('/connections/oauth/url', { provider })
+  getOAuthUrl: async (provider: string, flow_params?: Record<string, unknown>): Promise<string> => {
+    const { data } = await api.post('/connections/oauth/url', { provider, flow_params })
     return data.url
   },
-  handleCallback: async (code: string, provider: string): Promise<BankConnection> => {
-    const { data } = await api.post('/connections/oauth/callback', { code, provider })
+  listInstitutions: async (
+    provider: string,
+    country?: string,
+  ): Promise<{
+    countries: string[]
+    institutions: {
+      name: string
+      display_name: string
+      country: string
+      logo?: string | null
+      bic?: string | null
+      psu_types: string[]
+      max_consent_days?: number | null
+      max_history_days?: number | null
+    }[]
+  }> => {
+    const { data } = await api.get(`/connections/${provider}/institutions`, {
+      params: country ? { country } : undefined,
+    })
     return data
+  },
+  handleCallback: async (code: string, provider: string, state?: string): Promise<BankConnection> => {
+    const { data } = await api.post('/connections/oauth/callback', { code, provider, state })
+    return data
+  },
+  getReauthUrl: async (connectionId: string): Promise<string> => {
+    const { data } = await api.post(`/connections/${connectionId}/oauth/reauth-url`)
+    return data.url
   },
   sync: async (id: string): Promise<BankConnection> => {
     const { data } = await api.post(`/connections/${id}/sync`)
@@ -915,12 +1004,12 @@ export const assetGroups = {
 
 // Reports
 export const reports = {
-  netWorth: async (months = 12, interval = 'monthly'): Promise<ReportResponse> => {
-    const { data } = await api.get('/reports/net-worth', { params: { months, interval } })
+  netWorth: async (months = 12, interval = 'monthly', period?: 'ytd'): Promise<ReportResponse> => {
+    const { data } = await api.get('/reports/net-worth', { params: { months, interval, period } })
     return data
   },
-  incomeExpenses: async (months = 12, interval = 'monthly'): Promise<ReportResponse> => {
-    const { data } = await api.get('/reports/income-expenses', { params: { months, interval } })
+  incomeExpenses: async (months = 12, interval = 'monthly', period?: 'ytd'): Promise<ReportResponse> => {
+    const { data } = await api.get('/reports/income-expenses', { params: { months, interval, period } })
     return data
   },
   cashFlow: async (months = 6, interval = 'daily', baseline = false): Promise<ReportResponse> => {
@@ -1019,6 +1108,18 @@ export const admin = {
   },
   accountingMode: async (): Promise<{ mode: 'cash' | 'accrual' }> => {
     const { data } = await api.get('/admin/accounting-mode')
+    return data
+  },
+  numberFormat: async (): Promise<{ format: NumberFormat }> => {
+    const { data } = await api.get('/admin/number-format')
+    return data
+  },
+  dateFormat: async (): Promise<{ format: DateFormat }> => {
+    const { data } = await api.get('/admin/date-format')
+    return data
+  },
+  defaultColors: async (): Promise<{ light: string | null; dark: string | null }> => {
+    const { data } = await api.get('/admin/default-colors')
     return data
   },
 }

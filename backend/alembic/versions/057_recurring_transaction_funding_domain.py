@@ -1,7 +1,7 @@
 """recurring transaction funding domain
 
-Revision ID: 054
-Revises: 053
+Revision ID: 057
+Revises: 056
 Create Date: 2026-05-09
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "054"
-down_revision: Union[str, None] = "053"
+revision: str = "057"
+down_revision: Union[str, None] = "056"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

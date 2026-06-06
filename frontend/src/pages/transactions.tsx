@@ -1,10 +1,13 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useRegisterPageChatContext } from '@/lib/page-chat-context'
 import { getAccountName } from '@/lib/account-utils'
+import { currentMonth, monthRange, monthFromRange } from '@/lib/month-utils'
+import { MonthStepper } from '@/components/month-stepper'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
+import { useDisplayLocale, useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { transactions, categories as categoriesApi, categoryGroups as categoryGroupsApi, accounts as accountsApi, recurring, payees as payeesApi, admin, groups as groupsApi } from '@/lib/api'
+import { transactions, categories as categoriesApi, categoryGroups as categoryGroupsApi, accounts as accountsApi, recurring, payees as payeesApi, admin, groups as groupsApi, rules as rulesApi } from '@/lib/api'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -24,8 +27,15 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { Skeleton } from '@/components/ui/skeleton'
-import { AlertTriangle, ArrowLeftRight, ArrowUp, ArrowDown, Check, Copy, Download, HelpCircle, Info, Paperclip, Users, X, EyeClosed } from 'lucide-react'
-import type { Transaction } from '@/types'
+import { AlertTriangle, ArrowLeftRight, ArrowUp, ArrowDown, Check, Copy, Download, HelpCircle, Info, MoreHorizontal, Paperclip, Users, X, EyeClosed, SlidersHorizontal } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import type { Rule, RuleAction, Transaction } from '@/types'
+import { RuleDialog, type RuleDialogInitialData } from '@/components/rule-dialog'
 import { PageHeader } from '@/components/page-header'
 import { CategoryIcon } from '@/components/category-icon'
 import { CategorySelect } from '@/components/category-select'
@@ -38,6 +48,7 @@ import { BulkAddToGroupDialog, type BulkAddToGroupSubmission } from '@/component
 import { TransactionsFilterBar } from '@/components/transactions-filter-bar'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
+import { useWorkspace } from '@/contexts/workspace-context'
 
 type TransactionUpdatePayload = Partial<Transaction> & {
   apply_to_transfer_pair?: boolean
@@ -59,12 +70,14 @@ function parseHashtags(notes: string | null): string[] {
 }
 
 export default function TransactionsPage() {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
-  const locale = i18n.language === 'en' ? 'en-US' : i18n.language
+  const locale = useDisplayLocale()
+  const dateLocale = useDateLocale()
   const { mask } = usePrivacyMode()
   const { user } = useAuth()
+  const { canWrite } = useWorkspace()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
   const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
@@ -74,8 +87,28 @@ export default function TransactionsPage() {
     return initial ? [initial] : []
   })
   const [filterUncategorized, setFilterUncategorized] = useState<boolean>(false)
-  const [filterFrom, setFilterFrom] = useState<string>('')
-  const [filterTo, setFilterTo] = useState<string>('')
+  // Seed the date range from the URL, or default to the current month on first
+  // open (no ?from/?to). Done in the initializer so it survives effect re-runs
+  // (e.g. React StrictMode's double-invoke in development).
+  const [filterFrom, setFilterFrom] = useState<string>(() => {
+    const f = searchParams.get('from')
+    const t = searchParams.get('to')
+    return f || t ? (f ?? '') : monthRange(currentMonth()).from
+  })
+  const [filterTo, setFilterTo] = useState<string>(() => {
+    const f = searchParams.get('from')
+    const t = searchParams.get('to')
+    return f || t ? (t ?? '') : monthRange(currentMonth()).to
+  })
+  // Month reflected by the stepper: the active range when it spans exactly one
+  // full month, otherwise the current month (custom ranges still navigable).
+  const steppedMonth = monthFromRange(filterFrom, filterTo) ?? currentMonth()
+  const handleMonthChange = (ym: string) => {
+    const { from, to } = monthRange(ym)
+    setFilterFrom(from)
+    setFilterTo(to)
+    setPage(1)
+  }
   const [searchInput, setSearchInput] = useState(() => searchParams.get('q') ?? '')
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get('q') ?? '')
   const [dialogOpen, setDialogOpen] = useState(false)
@@ -132,14 +165,27 @@ export default function TransactionsPage() {
   const [bulkCategory, setBulkCategory] = useState<string>('')
   const [bulkAddToGroupOpen, setBulkAddToGroupOpen] = useState(false)
   const [bulkTagInput, setBulkTagInput] = useState<string>('')
+  const [createRuleOpen, setCreateRuleOpen] = useState(false)
+  const [createRuleInitialData, setCreateRuleInitialData] = useState<RuleDialogInitialData | undefined>(undefined)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
   const highlightId = searchParams.get('highlight')
   const highlightedRowRef = useRef<HTMLTableRowElement | null>(null)
+  // Last URL query we synced from, to tell a genuine navigation apart from the
+  // initial mount (and from StrictMode's double-invoke, which repeats the same
+  // value). Starts null so the first run is recognized as the initial mount.
+  const prevSearchRef = useRef<string | null>(null)
 
   // Sync state from URL when navigating (e.g. from the command palette) while
   // the page is already mounted. Typing in the search box does not touch the
   // URL, so this effect only fires on genuine navigation events.
   useEffect(() => {
+    const search = searchParams.toString()
+    // Skip re-runs with an unchanged query (e.g. StrictMode's second mount),
+    // so they can't override the initial current-month default.
+    if (prevSearchRef.current === search) return
+    const isInitial = prevSearchRef.current === null
+    prevSearchRef.current = search
+
     const nextQ = searchParams.get('q') ?? ''
     setSearchInput(nextQ)
     setSearchQuery(nextQ)
@@ -153,8 +199,18 @@ export default function TransactionsPage() {
     setFilterUncategorized(searchParams.get('uncategorized') === '1');
     const accounts = searchParams.get('account_id');
     setFilterAccountIds(accounts ? accounts.split(',') : []);
-    setFilterFrom(searchParams.get('from') ?? '');
-    setFilterTo(searchParams.get('to') ?? '');
+    const urlFrom = searchParams.get('from')
+    const urlTo = searchParams.get('to')
+    if (urlFrom || urlTo) {
+      // Explicit range in the URL (shared/bookmarked link) wins.
+      setFilterFrom(urlFrom ?? '')
+      setFilterTo(urlTo ?? '')
+    } else if (!isInitial) {
+      // A genuine navigation cleared the range (e.g. Clear filters): show all.
+      // On the initial mount we keep the current-month default seeded above.
+      setFilterFrom('')
+      setFilterTo('')
+    }
     setFilterMinAmount(searchParams.get('min_amount') ?? '');
     setFilterMaxAmount(searchParams.get('max_amount') ?? '');
     setPage(1)
@@ -513,6 +569,42 @@ export default function TransactionsPage() {
     },
   })
 
+  const createRuleMutation = useMutation({
+    mutationFn: (data: Omit<Rule, 'id' | 'user_id'>) => rulesApi.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['rules'] })
+      setCreateRuleOpen(false)
+      setCreateRuleInitialData(undefined)
+      toast.success(t('rules.created'))
+    },
+    onError: (error: unknown) => {
+      const err = error as { response?: { status?: number } }
+      if (err?.response?.status === 409) {
+        toast.error(t('rules.duplicateName'))
+      } else {
+        toast.error(t('common.error'))
+      }
+    },
+  })
+
+  const handleCreateRuleFromTransaction = (tx: Transaction) => {
+    const conditions = [
+      { field: 'description', op: 'contains', value: tx.description },
+    ]
+    if (tx.payee_id) {
+      conditions.push({ field: 'payee_id', op: 'equals', value: tx.payee_id })
+    }
+    const actions: RuleAction[] = tx.category_id
+      ? [{ op: 'set_category', value: tx.category_id }]
+      : [{ op: 'set_category', value: '' }]
+    const tags = parseHashtags(tx.notes)
+    if (tags.length > 0) {
+      actions.push({ op: 'append_notes', value: tags.join(' ') })
+    }
+    setCreateRuleInitialData({ conditions, actions })
+    setCreateRuleOpen(true)
+  }
+
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => {
       const next = new Set(prev)
@@ -647,6 +739,31 @@ export default function TransactionsPage() {
     setDuplicateDraft(draft)
     setFormResetKey(k => k + 1)
     setDialogOpen(true)
+  }
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      if (selectedIds.size > 0) {
+        // Selection-only export bypasses other filters and hits the
+        // backend's `transaction_ids` short-circuit.
+        await transactions.export({ transaction_ids: Array.from(selectedIds) })
+      } else {
+        await transactions.export({
+          account_ids: filterAccountIds.length > 0 ? filterAccountIds : undefined,
+          category_ids: filterCategoryIds.length > 0 ? filterCategoryIds : undefined,
+          uncategorized: filterUncategorized ? true : undefined,
+          from: filterFrom || undefined,
+          to: filterTo || undefined,
+          q: searchQuery || undefined,
+        })
+      }
+      toast.success(t('transactions.exportSuccess'))
+    } catch {
+      toast.error(t('transactions.exportError'))
+    } finally {
+      setExporting(false)
+    }
   }
 
   // Resize: track which column is being dragged so we can clear listeners
@@ -814,7 +931,7 @@ export default function TransactionsPage() {
             )}
           </div>
           {showInlineDate && (
-            <p className="text-xs text-muted-foreground mt-0.5">{new Date(tx.date + 'T00:00:00').toLocaleDateString(locale)}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">{new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale)}</p>
           )}
           {(showInlineNotes || showInlineTags) && tx.notes && (
             <div className="mt-1 space-y-0.5">
@@ -849,7 +966,7 @@ export default function TransactionsPage() {
       case 'date':
         return (
           <TableCell key={col.id} style={widthStyle} className={`${baseClass} text-sm text-muted-foreground tabular-nums`}>
-            {new Date(tx.date + 'T00:00:00').toLocaleDateString(locale)}
+            {new Date(tx.date + 'T00:00:00').toLocaleDateString(dateLocale)}
           </TableCell>
         )
       case 'description':
@@ -947,76 +1064,101 @@ export default function TransactionsPage() {
     }
   }
 
+  // A single non-shared, non-transfer row selected can be duplicated; shared
+  // and transfer rows can't (issue #158). Computed once for both the desktop
+  // button and the mobile overflow menu.
+  const selectedSingleTx = canWrite && selectedIds.size === 1
+    ? filteredItems.find(tx => selectedIds.has(tx.id))
+    : undefined
+  const duplicableTx = selectedSingleTx && !selectedSingleTx.is_shared && !selectedSingleTx.transfer_pair_id
+    ? selectedSingleTx
+    : null
+
   return (
     <div>
       <PageHeader
         section={t('transactions.section')}
         title={t('transactions.title')}
         action={
-          <div className="flex items-center gap-2">
-            <TransactionsColumnPicker state={grid} />
-            <Button
-              variant="outline"
-              disabled={exporting}
-              onClick={async () => {
-                setExporting(true)
-                try {
-                  if (selectedIds.size > 0) {
-                    // Selection-only export bypasses other filters and
-                    // hits the backend's `transaction_ids` short-circuit.
-                    await transactions.export({
-                      transaction_ids: Array.from(selectedIds),
-                    })
-                  } else {
-                    await transactions.export({
-                      account_ids: filterAccountIds.length > 0 ? filterAccountIds : undefined,
-                      category_ids: filterCategoryIds.length > 0 ? filterCategoryIds : undefined,
-                      uncategorized: filterUncategorized ? true : undefined,
-                      from: filterFrom || undefined,
-                      to: filterTo || undefined,
-                      q: searchQuery || undefined,
-                    })
-                  }
-                  toast.success(t('transactions.exportSuccess'))
-                } catch {
-                  toast.error(t('transactions.exportError'))
-                } finally {
-                  setExporting(false)
-                }
-              }}
-            >
-              <Download size={16} className="mr-1.5" />
-              {exporting
-                ? t('transactions.exporting')
-                : selectedIds.size > 0
-                  ? t('transactions.exportSelected', { count: selectedIds.size })
-                  : t('transactions.exportCsv')}
-            </Button>
-            {/* Duplicate (issue #158): only when a single row is
-                selected. Pre-fills the Add Transaction dialog from
-                that row's fields; identity-bearing fields (id,
-                transfer_pair_id, splits) are not copied. Hidden for
-                shared rows and transfers — they can't be duplicated. */}
-            {selectedIds.size === 1 && (() => {
-              const selectedTx = filteredItems.find(tx => selectedIds.has(tx.id))
-              if (!selectedTx || selectedTx.is_shared || selectedTx.transfer_pair_id) return null
-              return (
-                <Button
-                  variant="outline"
-                  onClick={() => handleDuplicateTransaction(selectedTx)}
-                >
+          // Single row at every width: [month stepper] [+ Add Transaction] [⋯].
+          // The stepper is compact and shrinks first so all three fit on a
+          // phone (#257). On desktop the secondary actions (Columns, Export,
+          // Duplicate, Transfer) are inline labelled buttons; on mobile they
+          // collapse into the overflow menu so the row stays uncrowded.
+          <div className="flex items-center gap-2 sm:flex-wrap sm:justify-end">
+            <MonthStepper
+              value={steppedMonth}
+              onChange={handleMonthChange}
+              locale={dateLocale}
+              prevLabel={t('transactions.monthPrevious')}
+              nextLabel={t('transactions.monthNext')}
+            />
+
+            {/* Secondary actions: inline labelled buttons on desktop. */}
+            <div className="hidden sm:contents">
+              <TransactionsColumnPicker state={grid} />
+              <Button variant="outline" disabled={exporting} onClick={handleExport}>
+                <Download size={16} className="mr-1.5" />
+                {exporting
+                  ? t('transactions.exporting')
+                  : selectedIds.size > 0
+                    ? t('transactions.exportSelected', { count: selectedIds.size })
+                    : t('transactions.exportCsv')}
+              </Button>
+              {/* Duplicate (issue #158): single non-shared, non-transfer row
+                  selected. Pre-fills Add Transaction from its fields. */}
+              {duplicableTx && (
+                <Button variant="outline" onClick={() => handleDuplicateTransaction(duplicableTx)}>
                   <Copy size={16} className="mr-1.5" />
                   {t('transactions.duplicate')}
                 </Button>
-              )
-            })()}
-            <Button variant="outline" onClick={() => setTransferDialogOpen(true)}>
-              <ArrowLeftRight size={16} className="mr-1.5" />
-              {t('transactions.transfer')}
-            </Button>
-            <Button onClick={() => { setEditingTx(null); setDialogOpen(true) }}>
-              + {t('transactions.addManual')}
-            </Button>
+              )}
+              {canWrite && (
+                <Button variant="outline" onClick={() => setTransferDialogOpen(true)}>
+                  <ArrowLeftRight size={16} className="mr-1.5" />
+                  {t('transactions.transfer')}
+                </Button>
+              )}
+            </div>
+
+            {/* Primary action: present at every width. */}
+            {canWrite && (
+              <Button onClick={() => { setEditingTx(null); setDialogOpen(true) }}>
+                + {t('transactions.addManual')}
+              </Button>
+            )}
+
+            {/* Secondary actions: overflow menu on mobile only. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="!size-9 sm:hidden"
+                  aria-label={t('common.more')}
+                >
+                  <MoreHorizontal size={18} />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem disabled={exporting} onClick={handleExport}>
+                  <Download size={16} className="mr-2" />
+                  {t('transactions.exportCsv')}
+                </DropdownMenuItem>
+                {duplicableTx && (
+                  <DropdownMenuItem onClick={() => handleDuplicateTransaction(duplicableTx)}>
+                    <Copy size={16} className="mr-2" />
+                    {t('transactions.duplicate')}
+                  </DropdownMenuItem>
+                )}
+                {canWrite && (
+                  <DropdownMenuItem onClick={() => setTransferDialogOpen(true)}>
+                    <ArrowLeftRight size={16} className="mr-2" />
+                    {t('transactions.transfer')}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         }
       />
@@ -1132,13 +1274,15 @@ export default function TransactionsPage() {
             <TableHeader>
               <TableRow className="border-b border-border hover:bg-transparent">
                 <TableHead style={{ width: 40, minWidth: 40 }} className="py-3 pl-4 pr-0">
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    ref={(el) => { if (el) el.indeterminate = someSelected }}
-                    onChange={toggleSelectAll}
-                    className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
-                  />
+                  {canWrite && (
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => { if (el) el.indeterminate = someSelected }}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                    />
+                  )}
                 </TableHead>
                 {grid.visibleColumns.map(renderHeaderCell)}
               </TableRow>
@@ -1150,13 +1294,14 @@ export default function TransactionsPage() {
                   ref={tx.id === highlightId ? highlightedRowRef : undefined}
                   className={`hover:bg-muted border-b border-border last:border-0 ${
                     selectedIds.has(tx.id) ? 'bg-primary/5' : ''
-                  } ${tx.is_shared ? 'cursor-default' : 'cursor-pointer'}`}
+                  } ${tx.is_shared || !canWrite ? 'cursor-default' : 'cursor-pointer'}`}
                   onClick={() => {
                     if (tx.is_shared) {
                       // Owned by another user — view in the group context instead.
                       if (tx.group_id) navigate(`/groups/${tx.group_id}`)
                       return
                     }
+                    if (!canWrite) return
                     setEditingTx(tx)
                     setDialogOpen(true)
                   }}
@@ -1165,7 +1310,7 @@ export default function TransactionsPage() {
                     {/* Bulk operations are scoped to user.id so they
                         silently skip shared rows — hide the checkbox
                         on those to avoid the dead-end UX. */}
-                    {!tx.is_shared && (
+                    {canWrite && !tx.is_shared && (
                       <input
                         type="checkbox"
                         checked={selectedIds.has(tx.id)}
@@ -1369,6 +1514,26 @@ export default function TransactionsPage() {
               <span className="hidden lg:inline">{t('transactions.linkAsTransfer')}</span>
             </Button>
 
+            <div className="w-px bg-border/60 self-stretch" />
+
+            {/* Create Rule — only when exactly one non-shared transaction is selected */}
+            {selectedIds.size === 1 && (() => {
+              const selectedTx = filteredItems.find(tx => selectedIds.has(tx.id))
+              if (!selectedTx || selectedTx.is_shared) return null
+              return (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => handleCreateRuleFromTransaction(selectedTx)}
+                  className="h-8 px-3 shrink-0 text-sm"
+                  title={t('transactions.createRule')}
+                >
+                  <SlidersHorizontal size={15} className="lg:mr-1.5" />
+                  <span className="hidden lg:inline">{t('transactions.createRule')}</span>
+                </Button>
+              )
+            })()}
+
             <div className="ml-auto" />
 
             {/* Close */}
@@ -1444,6 +1609,11 @@ export default function TransactionsPage() {
         onDelete={editingTx ? () => deleteMutation.mutate(editingTx.id) : undefined}
         onUnlinkTransfer={(pairId) => unlinkTransferMutation.mutate(pairId)}
         onIgnoreChanged={invalidateAfterTxMutation}
+        onCreateRule={(tx) => {
+          setDialogOpen(false)
+          setEditingTx(null)
+          handleCreateRuleFromTransaction(tx)
+        }}
         loading={createMutation.isPending || updateMutation.isPending || deleteMutation.isPending || unlinkTransferMutation.isPending}
         error={createMutation.error || updateMutation.error ? extractApiError(createMutation.error || updateMutation.error) : null}
         isSynced={editingTx?.source === 'sync'}
@@ -1490,6 +1660,21 @@ export default function TransactionsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Create Rule from Transaction Dialog */}
+      <RuleDialog
+        key={createRuleOpen ? 'rule-open' : 'rule-closed'}
+        open={createRuleOpen}
+        onClose={() => { setCreateRuleOpen(false); setCreateRuleInitialData(undefined) }}
+        rule={null}
+        categories={categoriesList ?? []}
+        categoryGroups={categoryGroupsList ?? []}
+        accounts={accountsList ?? []}
+        payees={payeesList ?? []}
+        onSave={(data) => createRuleMutation.mutate(data as Omit<Rule, 'id' | 'user_id'>)}
+        loading={createRuleMutation.isPending}
+        initialData={createRuleInitialData}
+      />
     </div>
   )
 }

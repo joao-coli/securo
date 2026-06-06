@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { getAccountName } from '@/lib/account-utils'
 import { useTranslation } from 'react-i18next'
+import { useDateLocale } from '@/hooks/use-display-locale'
 import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/contexts/auth-context'
 import { currencies as currenciesApi, transactions as transactionsApi, settings as settingsApi, payees as payeesApi, fundingDomains as fundingDomainsApi } from '@/lib/api'
@@ -17,7 +18,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog'
-import { AlertTriangle, ChevronDown, ChevronLeft, Download, Eye, EyeClosed, Paperclip, Upload, X, FileText, Plus, Unlink } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronLeft, Download, Eye, EyeClosed, Paperclip, Upload, X, FileText, Plus, Unlink, SlidersHorizontal } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -73,6 +74,7 @@ export function TransactionDialog({
   onDelete,
   onUnlinkTransfer,
   onIgnoreChanged,
+  onCreateRule,
   loading,
   error,
   isSynced = false,
@@ -90,6 +92,7 @@ export function TransactionDialog({
   onDelete?: () => void
   onUnlinkTransfer?: (pairId: string) => void
   onIgnoreChanged?: () => void
+  onCreateRule?: (tx: Transaction) => void
   loading: boolean
   error: string | null
   isSynced?: boolean
@@ -161,6 +164,7 @@ export function TransactionDialog({
               onDelete={onDelete}
               onUnlinkTransfer={onUnlinkTransfer}
               onIgnoreChanged={onIgnoreChanged}
+              onCreateRule={onCreateRule}
               onCancel={onClose}
               loading={loading}
               error={error}
@@ -278,6 +282,7 @@ function TransactionForm({
   onDelete,
   onUnlinkTransfer,
   onIgnoreChanged,
+  onCreateRule,
   onCancel,
   loading,
   error,
@@ -296,6 +301,7 @@ function TransactionForm({
   onDelete?: () => void
   onUnlinkTransfer?: (pairId: string) => void
   onIgnoreChanged?: () => void
+  onCreateRule?: (tx: Transaction) => void
   onCancel: () => void
   loading: boolean
   error: string | null
@@ -304,10 +310,10 @@ function TransactionForm({
   activePreviewId: string | null
   hasPreview: boolean
 }) {
-  const { t, i18n } = useTranslation()
+  const { t } = useTranslation()
   const { user } = useAuth()
   const userCurrency = user?.preferences?.currency_display ?? 'USD'
-  const locale = i18n.language === 'en' ? 'en-US' : i18n.language
+  const dateLocale = useDateLocale()
   const { data: supportedCurrencies } = useQuery({
     queryKey: ['currencies'],
     queryFn: currenciesApi.list,
@@ -385,6 +391,18 @@ function TransactionForm({
   const pendingFileInputRef = useRef<HTMLInputElement>(null)
   const pendingActionRef = useRef<SaveAction>('save')
   const formRef = useRef<HTMLFormElement>(null)
+  const descriptionRef = useRef<HTMLTextAreaElement>(null)
+
+  // Bank-synced descriptions are read-only and can be long; auto-grow the
+  // textarea so the full text is always visible (issue #256).
+  useEffect(() => {
+    const el = descriptionRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    // border-box: add the border so scrollHeight content isn't clipped
+    const border = el.offsetHeight - el.clientHeight
+    el.style.height = `${el.scrollHeight + border}px`
+  }, [description, isSynced])
   const [isIgnored, setIsIgnored] = useState(seed?.is_ignored ?? false)
   const [togglingIgnore, setTogglingIgnore] = useState(false)
 
@@ -603,18 +621,27 @@ function TransactionForm({
         <div className="flex items-center gap-2 p-3 text-sm bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-md">
           <span>{t('transactions.recurringInfo', {
             frequency: t(`recurring.${recurringMatch.frequency}`),
-            next: new Date(recurringMatch.next_occurrence).toLocaleDateString(locale),
+            next: new Date(recurringMatch.next_occurrence).toLocaleDateString(dateLocale),
           })}</span>
         </div>
       )}
       <div className="space-y-2">
         <Label>{t('transactions.description')}</Label>
-        <Input
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          required
-          disabled={isSynced}
-        />
+        {isSynced ? (
+          <textarea
+            ref={descriptionRef}
+            className="w-full border border-input rounded-md px-3 py-2 text-sm bg-muted/40 text-muted-foreground resize-none overflow-hidden cursor-default outline-none focus:outline-none focus-visible:outline-none"
+            value={description}
+            readOnly
+            rows={1}
+          />
+        ) : (
+          <Input
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            required
+          />
+        )}
         {isSynced && transaction?.payee && transaction.payee !== transaction.description && (
           <p className="text-xs text-muted-foreground">{transaction.payee}</p>
         )}
@@ -804,16 +831,16 @@ function TransactionForm({
         return (
           <div className="space-y-2">
             <Label>
-              {t('transactions.effectiveBillDate')}{' '}
+              {t('transactions.effectiveBillDate', 'Effective bill date')}{' '}
               <span className="text-muted-foreground font-normal text-xs">
-                ({t('transactions.effectiveBillDateHint')})
+                ({t('transactions.effectiveBillDateHint', 'manual, overrides the automatic cycle')})
               </span>
             </Label>
             <div className="inline-flex items-center gap-1">
               <DatePickerInput
                 value={effectiveBillDate}
                 onChange={setEffectiveBillDate}
-                placeholder={t('transactions.effectiveBillDatePlaceholder')}
+                placeholder={t('transactions.effectiveBillDatePlaceholder', 'Bill due date (optional)')}
               />
               {effectiveBillDate && (
                 <button
@@ -928,6 +955,18 @@ function TransactionForm({
             >
               {isIgnored ? <Eye size={16} /> : <EyeClosed size={16} />}
               {isIgnored ? t('transactions.unignoreAction') : t('transactions.ignoreAction')}
+            </Button>
+          )}
+          {transaction && onCreateRule && (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onCreateRule(transaction)}
+              className="gap-1.5"
+              title={t('transactions.createRule')}
+            >
+              <SlidersHorizontal size={16} />
+              {t('transactions.createRule')}
             </Button>
           )}
         </div>

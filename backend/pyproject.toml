@@ -48,14 +48,22 @@ include = ["app*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 testpaths = ["tests"]
 
 [tool.coverage.run]
+# FastAPI/Starlette route handlers run on SQLAlchemy's greenlet, so coverage.py
+# must track greenlet (and thread) execution contexts — otherwise async endpoint
+# bodies execute but their lines are never attributed, under-reporting every API module.
+concurrency = ["greenlet", "thread"]
 omit = [
     "app/cli.py",
     "app/worker.py",
     "app/tasks/*",
     "app/providers/pluggy.py",
+    "app/providers/enable_banking.py",
+    "app/providers/simplefin.py",
     "app/providers/market_price.py",
 ]
 

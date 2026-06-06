@@ -106,9 +106,9 @@ def _serialize_domain(domain: Optional[FundingDomain]) -> Optional[FundingDomain
 async def _get_credit_card_account(
     session: AsyncSession,
     account_id: uuid.UUID,
-    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
 ) -> Account:
-    account = await get_account(session, account_id, user_id)
+    account = await get_account(session, account_id, workspace_id)
     if account is None:
         raise ValueError("Credit-card account not found")
     if account.type != "credit_card":
@@ -118,12 +118,12 @@ async def _get_credit_card_account(
 
 async def _validate_payment_transaction(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     payment_transaction_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
 ) -> tuple[Transaction, Transaction]:
     payment = await session.get(Transaction, payment_transaction_id)
-    if payment is None or payment.user_id != user_id:
+    if payment is None or payment.workspace_id != workspace_id:
         raise ValueError("Payment transaction not found")
     if payment.transfer_pair_id is None:
         raise ValueError("Payment transaction must be linked as a transfer")
@@ -137,7 +137,7 @@ async def _validate_payment_transaction(
             )
         )
         debit_payment = debit_result.scalar_one_or_none()
-        if debit_payment is None or debit_payment.user_id != user_id:
+        if debit_payment is None or debit_payment.workspace_id != workspace_id:
             raise ValueError("Payment transfer must include a debit side")
         return debit_payment, card_credit
     if payment.type != "debit":
@@ -177,7 +177,7 @@ async def _validate_payment_allocation_amount(
 
 async def _validate_bill(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     bill_id: Optional[uuid.UUID],
 ) -> Optional[CreditCardBill]:
@@ -186,7 +186,7 @@ async def _validate_bill(
     result = await session.execute(
         select(CreditCardBill).where(
             CreditCardBill.id == bill_id,
-            CreditCardBill.user_id == user_id,
+            CreditCardBill.workspace_id == workspace_id,
             CreditCardBill.account_id == credit_card_account_id,
         )
     )
@@ -198,16 +198,17 @@ async def _validate_bill(
 
 async def create_payment_allocation(
     session: AsyncSession,
+    workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     data: CreditCardPaymentAllocationCreate,
 ) -> CreditCardPaymentAllocation:
-    await _get_credit_card_account(session, credit_card_account_id, user_id)
+    await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     canonical_payment, card_credit = await _validate_payment_transaction(
-        session, user_id, data.payment_transaction_id, credit_card_account_id
+        session, workspace_id, data.payment_transaction_id, credit_card_account_id
     )
     await get_assignable_funding_domain(session, data.funding_domain_id, user_id)
-    bill = await _validate_bill(session, user_id, credit_card_account_id, data.bill_id)
+    bill = await _validate_bill(session, workspace_id, credit_card_account_id, data.bill_id)
     if data.amount <= Decimal("0"):
         raise ValueError("Allocation amount must be positive")
     await _validate_payment_allocation_amount(
@@ -235,6 +236,7 @@ async def create_payment_allocation(
 
 async def list_payment_allocations(
     session: AsyncSession,
+    workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     *,
@@ -242,13 +244,12 @@ async def list_payment_allocations(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> list[CreditCardPaymentAllocation]:
-    account = await _get_credit_card_account(session, credit_card_account_id, user_id)
+    account = await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     query = (
         select(CreditCardPaymentAllocation)
         .join(Transaction, Transaction.id == CreditCardPaymentAllocation.payment_transaction_id)
         .options(selectinload(CreditCardPaymentAllocation.funding_domain))
         .where(
-            CreditCardPaymentAllocation.user_id == user_id,
             CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
         )
     )
@@ -264,13 +265,13 @@ async def list_payment_allocations(
 
 async def list_payment_candidates(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     *,
     date_from: Optional[date],
     date_to: Optional[date],
 ) -> list[CreditCardPaymentCandidate]:
-    await _get_credit_card_account(session, credit_card_account_id, user_id)
+    await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     if date_from is None or date_to is None:
         raise ValueError("date_from/date_to are required")
 
@@ -281,7 +282,6 @@ async def list_payment_candidates(
             func.coalesce(func.sum(CreditCardPaymentAllocation.amount), 0).label("allocated_amount"),
         )
         .where(
-            CreditCardPaymentAllocation.user_id == user_id,
             CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
         )
         .group_by(CreditCardPaymentAllocation.payment_transaction_id)
@@ -303,13 +303,13 @@ async def list_payment_candidates(
             and_(
                 debit_payment.transfer_pair_id == Transaction.transfer_pair_id,
                 debit_payment.id != Transaction.id,
-                debit_payment.user_id == user_id,
+                debit_payment.workspace_id == workspace_id,
                 debit_payment.type == "debit",
             ),
         )
         .outerjoin(allocated_subq, allocated_subq.c.payment_transaction_id == debit_payment.id)
         .where(
-            Transaction.user_id == user_id,
+            Transaction.workspace_id == workspace_id,
             Transaction.account_id == credit_card_account_id,
             Transaction.type == "credit",
             Transaction.source != "opening_balance",
@@ -354,6 +354,7 @@ async def list_payment_candidates(
 
 async def update_payment_allocation(
     session: AsyncSession,
+    workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     allocation_id: uuid.UUID,
@@ -376,7 +377,7 @@ async def update_payment_allocation(
             raise ValueError("Funding domain is required")
         await get_assignable_funding_domain(session, update_data["funding_domain_id"], user_id)
     if "bill_id" in update_data:
-        bill = await _validate_bill(session, user_id, credit_card_account_id, update_data["bill_id"])
+        bill = await _validate_bill(session, workspace_id, credit_card_account_id, update_data["bill_id"])
         if bill is not None and "statement_due_date" not in update_data:
             update_data["statement_due_date"] = bill.due_date
     if "amount" in update_data and update_data["amount"] <= Decimal("0"):
@@ -384,7 +385,7 @@ async def update_payment_allocation(
     if "amount" in update_data:
         _, card_credit = await _validate_payment_transaction(
             session,
-            user_id,
+            workspace_id,
             allocation.payment_transaction_id,
             credit_card_account_id,
         )
@@ -404,11 +405,12 @@ async def update_payment_allocation(
 
 async def delete_payment_allocation(
     session: AsyncSession,
+    workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     allocation_id: uuid.UUID,
 ) -> bool:
-    await _get_credit_card_account(session, credit_card_account_id, user_id)
+    await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     result = await session.execute(
         select(CreditCardPaymentAllocation).where(
             CreditCardPaymentAllocation.id == allocation_id,
@@ -426,16 +428,16 @@ async def delete_payment_allocation(
 
 async def get_statement_funding_report(
     session: AsyncSession,
-    user_id: uuid.UUID,
+    workspace_id: uuid.UUID,
     credit_card_account_id: uuid.UUID,
     *,
     bill_id: Optional[uuid.UUID] = None,
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
 ) -> StatementFundingReport:
-    account = await _get_credit_card_account(session, credit_card_account_id, user_id)
+    account = await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     if bill_id is not None:
-        bill = await _validate_bill(session, user_id, credit_card_account_id, bill_id)
+        bill = await _validate_bill(session, workspace_id, credit_card_account_id, bill_id)
         if date_from is None or date_to is None:
             date_from, date_to = _cycle_window_for_bill(account, bill)
     if date_from is None or date_to is None:
@@ -443,7 +445,7 @@ async def get_statement_funding_report(
 
     bucket_date = credit_card_bill_bucket_date()
     base_filters = [
-        Transaction.user_id == user_id,
+        Transaction.workspace_id == workspace_id,
         Transaction.account_id == credit_card_account_id,
         Transaction.type == "debit",
         Transaction.source != "opening_balance",
@@ -486,7 +488,6 @@ async def get_statement_funding_report(
         )
 
     allocation_filters = [
-        CreditCardPaymentAllocation.user_id == user_id,
         CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
     ]
     allocation_filters.extend(_allocation_scope_filters(

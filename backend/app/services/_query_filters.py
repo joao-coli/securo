@@ -121,6 +121,7 @@ async def owner_split_offset_pnl(
     month_end: date,
     use_effective_date: bool = False,
     primary_currency: Optional[str] = None,
+    workspace_id: Optional[uuid.UUID] = None,
 ) -> tuple[float, float]:
     """Return (income_offset, expense_offset) — the totals to *subtract*
     from the owner's full-amount aggregations so only their own share
@@ -164,6 +165,11 @@ async def owner_split_offset_pnl(
         .join(Transaction, TransactionSplit.transaction_id == Transaction.id)
         .where(
             Transaction.user_id == user_id,
+            *(
+                [Transaction.workspace_id == workspace_id]
+                if workspace_id is not None
+                else []
+            ),
             TransactionSplit.group_member_id.notin_(viewer_member_ids),
             Transaction.source != "opening_balance",
             date_col >= month_start,
@@ -205,6 +211,7 @@ async def owner_split_offset_by_category(
     month_end: date,
     use_effective_date: bool = False,
     primary_currency: Optional[str] = None,
+    workspace_id: Optional[uuid.UUID] = None,
 ) -> dict:
     """Per-category, sum of non-owner shares on owner-side debit splits —
     subtract from full owner debits to get the owner's category share."""
@@ -232,6 +239,11 @@ async def owner_split_offset_by_category(
         .join(Transaction, TransactionSplit.transaction_id == Transaction.id)
         .where(
             Transaction.user_id == user_id,
+            *(
+                [Transaction.workspace_id == workspace_id]
+                if workspace_id is not None
+                else []
+            ),
             Transaction.type == "debit",
             TransactionSplit.group_member_id.notin_(viewer_member_ids),
             Transaction.source != "opening_balance",
@@ -282,7 +294,14 @@ async def viewer_shared_pnl(
     from app.models.group import GroupMember
     from app.models.transaction_split import TransactionSplit
 
-    member_ids = select(GroupMember.id).where(GroupMember.linked_user_id == user_id)
+    # Cross-workspace Splitwise projection: include only invitations
+    # (linked_user_id matches but is_self is False). Self-memberships
+    # represent the user in their own group and are already counted via
+    # the workspace-scoped Transaction filter at the caller.
+    member_ids = select(GroupMember.id).where(
+        GroupMember.linked_user_id == user_id,
+        GroupMember.is_self.is_(False),
+    )
     date_col = Transaction.effective_date if use_effective_date else Transaction.date
 
     result = await session.execute(
@@ -359,7 +378,14 @@ async def viewer_shared_spending_by_category(
     from app.models.group import GroupMember
     from app.models.transaction_split import TransactionSplit
 
-    member_ids = select(GroupMember.id).where(GroupMember.linked_user_id == user_id)
+    # Cross-workspace Splitwise projection: include only invitations
+    # (linked_user_id matches but is_self is False). Self-memberships
+    # represent the user in their own group and are already counted via
+    # the workspace-scoped Transaction filter at the caller.
+    member_ids = select(GroupMember.id).where(
+        GroupMember.linked_user_id == user_id,
+        GroupMember.is_self.is_(False),
+    )
     date_col = Transaction.effective_date if use_effective_date else Transaction.date
 
     result = await session.execute(

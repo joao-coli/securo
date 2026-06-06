@@ -18,7 +18,7 @@ We believe personal finance should actually be <em>personal</em>. No corporation
 
 ## Quick Start
 
-**Linux & macOS** (installs Docker if needed):
+**Linux & macOS** (uses Docker or Podman; installs Docker if neither is present):
 
 ```bash
 curl -fsSL https://usesecuro.com/install.sh | bash
@@ -47,7 +47,7 @@ Open [http://localhost:3000](http://localhost:3000) and create an account. That'
 - Goals and savings targets with progress tracking
 - Asset management with valuation tracking and growth rules
 - Reports: Net Worth and Income vs Expenses with category sparklines
-- Bank sync via providers (Pluggy supported, extensible)
+- Bank sync via providers (Pluggy for Brazilian banks, Enable Banking for ~2500 European PSD2 banks, SimpleFIN for US and international banks, extensible)
 - Multi-currency support with automatic FX conversion
 - Multi-user support with admin panel and registration controls
 - Two-factor authentication (TOTP) with brute-force protection
@@ -55,14 +55,41 @@ Open [http://localhost:3000](http://localhost:3000) and create an account. That'
 
 ## Bank Sync (Optional)
 
-Create a `.env` file with your [Pluggy](https://pluggy.ai) credentials:
+Add credentials for any of the supported providers to `.env`, then restart with `docker compose up`. Configure one or both — each provider auto-registers when its credentials are present.
+
+### Pluggy — Brazilian banks
+
+Sign up at [pluggy.ai](https://pluggy.ai) and add:
 
 ```
 PLUGGY_CLIENT_ID=your-client-id
 PLUGGY_CLIENT_SECRET=your-client-secret
 ```
 
-Then restart: `docker compose up`
+### Enable Banking — European banks (PSD2)
+
+Sign up at [enablebanking.com](https://enablebanking.com), create a Production application, and download its PEM private key. Save the PEM to `./secrets/` (gitignored), then add:
+
+```
+ENABLE_BANKING_APP_ID=your-application-id
+ENABLE_BANKING_PRIVATE_KEY_FILE=/app/secrets/your-key.pem
+ENABLE_BANKING_OAUTH_REDIRECT_URI=https://your-host/oauth/callback
+```
+
+The redirect URI must match exactly one of the Allowed Redirect URLs in your EB application. Production EB requires HTTPS — for local development, expose your frontend via a tunnel (ngrok, cloudflared) or use the EB sandbox.
+
+> **Free tier — restricted mode.** Enable Banking's free plan requires you to pre-link the accounts you want to import inside the EB portal *before* connecting from Securo. If you skip that step, the connection returns no accounts and Securo will surface a banner with a link to the portal.
+
+### SimpleFIN — US and international banks
+
+[SimpleFIN](https://www.simplefin.org/) is a read-only open protocol. No API key needed — each connection brings its own credentials via a single-use Setup Token from the [SimpleFIN Bridge](https://bridge.simplefin.org/). Just enable the feature:
+
+```
+SIMPLEFIN_ENABLED=true
+SIMPLEFIN_API_URL=https://beta-bridge.simplefin.org   # sandbox; use bridge.simplefin.org for real banks
+```
+
+Then in Securo: **Accounts → Connect Bank → SimpleFIN**, and paste the token. The [developer page](https://beta-bridge.simplefin.org/info/developers) gives out free demo tokens if you want to try it without a real bank.
 
 ## Exchange Rates (Optional)
 
