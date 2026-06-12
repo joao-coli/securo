@@ -9,6 +9,8 @@ docs/plans/
 tmp/
 docker-compose.override.yml
 
+backups/*.sql.gz
+
 # Ignore local configuration files
 .vscode/
 

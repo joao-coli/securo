@@ -85,7 +85,12 @@ INFO:     Application startup complete.
 
 ## Database migrations on a fork
 
-Upstream and a fork must not use the **same Alembic revision numbers** for different changes. After merging upstream, fork-only migrations should chain **after** upstream’s current head. Revision numbers collide easily — upstream added `052`–`054` (workspaces) after our fork had already used `052`–`055` (funding domains). Funding migrations now live at **`055`–`058`** (after upstream `054`).
+Upstream and a fork must not use the **same Alembic revision numbers** for different changes. After merging upstream, fork-only migrations should chain **after** upstream’s current head. Revision numbers collide easily:
+
+| Upstream merge | Upstream took | Fork funding migrations moved to |
+|----------------|---------------|----------------------------------|
+| Workspaces     | `052`–`054`   | `055`–`058`                      |
+| 0.13.x         | `055`–`061`   | `062`–`065`                      |
 
 Check the graph:
 
@@ -117,7 +122,7 @@ docker compose run --rm backend sh -c "alembic stamp 045 && alembic upgrade head
 What this does:
 
 1. **`stamp 045`** — tells Alembic to treat the DB as at revision `045` (last shared revision before the collision).
-2. **`upgrade head`** — applies any missing upstream revisions, then fork `055`–`058` (funding domains). Fork funding migrations are **idempotent**: they skip tables/columns/indexes that already exist.
+2. **`upgrade head`** — applies any missing upstream revisions, then fork funding migrations (currently `062`–`065`). Fork funding migrations are **idempotent**: they skip tables/columns/indexes that already exist.
 
 If upstream added workspace migrations (`052`–`054`) since your last merge, a normal `alembic upgrade head` is usually enough — funding migrations were renumbered to follow `054`.
 
@@ -125,10 +130,46 @@ Confirm:
 
 ```bash
 docker compose run --rm backend alembic current
-# 058 (head)
+# 065 (head)
 ```
 
 **Do not** use `stamp 045` on a database that never had fork funding migrations — use `alembic upgrade head` only.
+
+### `alembic_version` at `058` but `workspaces` table missing (empty app after login)
+
+Symptoms:
+
+- Login succeeds but dashboards/accounts look empty.
+- Postgres logs: `relation "workspaces" does not exist`.
+- `alembic_version` is already `058`, yet `\dt workspaces` returns nothing.
+
+Cause: fork funding migrations used revision numbers `052`–`055` before upstream’s workspace migrations claimed `052`–`054`. Alembic thought the DB was at head while workspace migrations were never applied.
+
+Your data is usually still there — check:
+
+```bash
+docker compose exec db psql -U postgres -d securo \
+  -c "SELECT COUNT(*) FROM transactions;" \
+  -c "SELECT COUNT(*) FROM accounts;"
+```
+
+**Recovery** (run once):
+
+```bash
+docker compose run --rm backend sh -c "alembic stamp 051 && alembic upgrade head"
+docker compose restart backend
+```
+
+This runs upstream `052`–`054` (creates workspaces, backfills `workspace_id` on all rows), then fork `055`–`058` (idempotent — skips existing funding objects). Afterward verify:
+
+```bash
+docker compose exec db psql -U postgres -d securo \
+  -c "SELECT version_num FROM alembic_version;" \
+  -c "SELECT COUNT(*) FROM workspaces;" \
+  -c "SELECT COUNT(*) FROM transactions WHERE workspace_id IS NOT NULL;"
+```
+
+Refresh the browser (or log out and back in).
 
 ### New fork-only migrations
 

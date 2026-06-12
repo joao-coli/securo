@@ -12,6 +12,7 @@ from app.models.budget import Budget
 from app.models.import_log import ImportLog
 from app.models.asset import Asset
 from app.models.asset_group import AssetGroup
+from app.models.asset_transaction import AssetTransaction
 from app.models.asset_value import AssetValue
 from app.models.fx_rate import FxRate
 from app.models.transaction_attachment import TransactionAttachment
@@ -23,6 +24,7 @@ from app.models.credit_card_payment_allocation import CreditCardPaymentAllocatio
 from app.models.group import Group, GroupMember
 from app.models.transaction_split import TransactionSplit
 from app.models.group_settlement import GroupSettlement
+from app.models.collection import Collection, collection_accounts, collection_asset_groups
 
 # Side-effect import: register the before_insert listener that auto-stamps
 # workspace_id from user_id on financial entities. Imported last so all
@@ -45,6 +47,7 @@ __all__ = [
     "ImportLog",
     "Asset",
     "AssetGroup",
+    "AssetTransaction",
     "AssetValue",
     "FxRate",
     "TransactionAttachment",
@@ -58,4 +61,7 @@ __all__ = [
     "GroupMember",
     "TransactionSplit",
     "GroupSettlement",
+    "Collection",
+    "collection_accounts",
+    "collection_asset_groups",
 ]

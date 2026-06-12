@@ -16,12 +16,14 @@ from app.api.connections import router as connections_router
 from app.api.custom_auth import router as custom_auth_router
 from app.api.dashboard import router as dashboard_router
 from app.api.import_logs import router as import_logs_router
+from app.api.oidc_auth import router as oidc_auth_router
 from app.api.import_transactions import router as import_router
 from app.api.info import router as info_router
 from app.api.recurring_transactions import router as recurring_router
 from app.api.rules import router as rules_router
 from app.api.assets import router as assets_router
 from app.api.asset_groups import router as asset_groups_router
+from app.api.collections import router as collections_router
 from app.api.reports import router as reports_router
 from app.api.search import router as search_router
 from app.api.setup import router as setup_router
@@ -88,6 +90,7 @@ app.include_router(
     prefix="/api/auth",
     tags=["auth"],
 )
+app.include_router(oidc_auth_router)
 app.include_router(
     fastapi_users.get_register_router(UserRead, UserCreate),
     prefix="/api/auth",
@@ -126,6 +129,7 @@ app.include_router(goals_router)
 app.include_router(groups_router)
 app.include_router(assets_router)
 app.include_router(asset_groups_router)
+app.include_router(collections_router)
 app.include_router(dashboard_router)
 app.include_router(reports_router)
 app.include_router(search_router)

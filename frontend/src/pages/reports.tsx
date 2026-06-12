@@ -5,7 +5,6 @@ import { useQuery } from '@tanstack/react-query'
 import {
   AreaChart,
   Area,
-  BarChart,
   Bar,
   ComposedChart,
   Line,
@@ -25,6 +24,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/page-header'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
+import { useCollectionFilter } from '@/contexts/collection-filter-context'
 import type { ReportResponse, CategoryTrendItem } from '@/types'
 
 function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
@@ -89,14 +89,13 @@ const RANGE_LABELS: Record<string, string> = {
 interface ReportTab {
   key: string
   labelKey: string
-  fetch: (months: number, interval: string, period?: 'ytd') => Promise<ReportResponse>
   enabled: boolean
 }
 
 const REPORT_TABS: ReportTab[] = [
-  { key: 'net_worth', labelKey: 'reports.netWorth', fetch: (m, i, p) => reports.netWorth(m, i, p), enabled: true },
-  { key: 'income_expenses', labelKey: 'reports.incomeExpenses', fetch: (m, i, p) => reports.incomeExpenses(m, i, p), enabled: true },
-  { key: 'cash_flow', labelKey: 'reports.cashFlow', fetch: (m, i) => reports.cashFlow(m, i), enabled: true },
+  { key: 'net_worth', labelKey: 'reports.netWorth', enabled: true },
+  { key: 'income_expenses', labelKey: 'reports.incomeExpenses', enabled: true },
+  { key: 'cash_flow', labelKey: 'reports.cashFlow', enabled: true },
 ]
 
 export default function ReportsPage() {
@@ -113,6 +112,15 @@ export default function ReportsPage() {
   const [sparklineView, setSparklineView] = useState<'byExpenses' | 'byIncome'>('byExpenses')
   const [sparklinePage, setSparklinePage] = useState(0)
   const [cashFlowBaseline, setCashFlowBaseline] = useState(false)
+  // Active Collection filter (issue #105): scope all report tabs to its
+  // accounts; net worth also includes the collection's wallets' assets.
+  const { activeAccountIds, activeWalletIds } = useCollectionFilter()
+  const acctIds = activeAccountIds ?? undefined
+  const walletIds = activeWalletIds ?? undefined
+  // Wallet-only collection (active, zero accounts): the account-based reports
+  // (income/expenses, cash flow) have no data — only net worth (which includes
+  // the wallets' assets) is meaningful.
+  const noAccounts = activeAccountIds !== null && activeAccountIds.length === 0
 
   const currentTab = REPORT_TABS.find((tab) => tab.key === activeTab) ?? REPORT_TABS[0]
 
@@ -139,12 +147,14 @@ export default function ReportsPage() {
   }
 
   const { data, isLoading } = useQuery<ReportResponse>({
-    queryKey: ['reports', activeTab, rangeKey, months, period ?? null, interval, isCashFlow ? cashFlowBaseline : false],
+    queryKey: ['reports', activeTab, rangeKey, months, period ?? null, interval, isCashFlow ? cashFlowBaseline : false, activeAccountIds, activeWalletIds],
     queryFn: () =>
       isCashFlow
-        ? reports.cashFlow(months, interval, cashFlowBaseline)
-        : currentTab.fetch(months, interval, period),
-    enabled: currentTab.enabled,
+        ? reports.cashFlow(months, interval, cashFlowBaseline, acctIds)
+        : activeTab === 'income_expenses'
+          ? reports.incomeExpenses(months, interval, acctIds, period)
+          : reports.netWorth(months, interval, acctIds, walletIds, period),
+    enabled: currentTab.enabled && !(noAccounts && activeTab !== 'net_worth'),
   })
 
   const summary = data?.summary
@@ -156,15 +166,21 @@ export default function ReportsPage() {
   // The boundary point is duplicated in both series so the line visually
   // connects without a gap.
   const forecastStart = meta?.forecast_start_date ?? null
+  const NEGATIVE_SERIES = new Set(['liabilities'])
+
   const chartData = trend.map((dp) => {
     const isPast = forecastStart ? dp.date < forecastStart : false
     const isBoundary = forecastStart ? dp.date === forecastStart : false
+    const breakdowns = meta?.type === 'net_worth'
+      ? Object.fromEntries(Object.entries(dp.breakdowns).map(([k, v]) => [k, NEGATIVE_SERIES.has(k) ? -v : v]))
+      : dp.breakdowns
     return {
       date: dp.date,
       value: dp.value,
+      change: dp.change ?? null,
       valuePast: isPast || isBoundary ? dp.value : null,
       valueForecast: !isPast ? dp.value : null,
-      ...dp.breakdowns,
+      ...breakdowns,
     } as Record<string, string | number | null>
   })
 
@@ -620,14 +636,29 @@ export default function ReportsPage() {
                   tickCount={5}
                 />
                 <Tooltip
-                  formatter={(value?: number, name?: string) => [
-                    privacyMode ? MASK : formatCurrency(value ?? 0, userCurrency, locale),
-                    name === 'value'
-                      ? t(currentTab.labelKey)
-                      : t(`reports.${name ?? ''}`, { defaultValue: name ?? '' }),
-                  ]}
-                  labelFormatter={(label) => label}
-                  contentStyle={tooltipStyle}
+                  content={({ active, payload, label }) => {
+                    if (!active || !payload || payload.length === 0) return null
+                    const point = payload[0]?.payload as Record<string, number | null>
+                    const value = (payload[0]?.value as number) ?? 0
+                    const change = point.change ?? null
+                    const changeSign = change !== null && change >= 0 ? '+' : ''
+                    const changeColor = change !== null ? (change >= 0 ? '#10B981' : '#F43F5E') : ''
+                    return (
+                      <div style={tooltipStyle} className="px-3 py-2">
+                        <p className="text-xs font-medium mb-1">{label}</p>
+                        <p className="text-xs" style={{ color: '#6366F1' }}>
+                          {t(currentTab.labelKey)}:{' '}
+                          {privacyMode ? MASK : formatCurrency(value, userCurrency, locale)}
+                        </p>
+                        {change !== null && (
+                          <p className="text-xs" style={{ color: changeColor }}>
+                            {t('reports.change')}:{' '}
+                            {privacyMode ? MASK : `${changeSign}${formatCurrency(change, userCurrency, locale)}`}
+                          </p>
+                        )}
+                      </div>
+                    )
+                  }}
                 />
                 <Area
                   type="monotone"
@@ -918,7 +949,7 @@ export default function ReportsPage() {
               </div>
             ) : chartData.length > 0 && meta ? (
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+                <ComposedChart data={chartData} margin={{ top: 8, right: 16, left: 0, bottom: 0 }} stackOffset="sign">
                   <XAxis
                     dataKey="date"
                     tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
@@ -938,10 +969,11 @@ export default function ReportsPage() {
                     width={64}
                     tickCount={5}
                   />
+                  <ReferenceLine y={0} stroke="var(--border)" strokeWidth={1} />
                   <Tooltip
                     content={({ active, payload, label }) => {
                       if (!active || !payload) return null
-                      const items = payload.filter((p) => (p.value as number) > 0)
+                      const items = payload.filter((p) => p.value !== null && p.value !== undefined && (p.value as number) !== 0)
                       if (items.length === 0) return null
                       return (
                         <div style={tooltipStyle} className="px-3 py-2">
@@ -963,26 +995,53 @@ export default function ReportsPage() {
                     formatter={(value: string) => t(`reports.${value}`, { defaultValue: value })}
                   />
                   {(() => {
-                    const barSeries = meta.type === 'cash_flow'
+                    const isNetWorth = meta.type === 'net_worth'
+                    const allSeries = meta.type === 'cash_flow'
                       ? [
                           { key: 'inflow', color: '#10B981' },
                           { key: 'outflow', color: '#F43F5E' },
                         ]
                       : meta.series_keys.map((k) => ({ key: k, color: colorMap[k] || '#6366F1' }))
-                    return barSeries
-                      .filter(({ key }) => chartData.some((d) => (d[key] as number) > 0))
-                      .map(({ key, color }, idx, arr) => (
+                    const filteredSeries = allSeries.filter(({ key }) =>
+                      chartData.some((d) => { const v = d[key]; return typeof v === 'number' && v !== 0 })
+                    )
+                    const positiveKeys = isNetWorth ? filteredSeries.filter(({ key }) => !NEGATIVE_SERIES.has(key)) : filteredSeries
+                    const negativeKeys = isNetWorth ? filteredSeries.filter(({ key }) => NEGATIVE_SERIES.has(key)) : []
+                    const lastPositiveKey = positiveKeys.at(-1)?.key ?? null
+                    const lastNegativeKey = negativeKeys.at(-1)?.key ?? null
+                    return filteredSeries.map(({ key, color }) => {
+                      let radius: [number, number, number, number] = [0, 0, 0, 0]
+                      if (isNetWorth && NEGATIVE_SERIES.has(key) && key === lastNegativeKey) {
+                        radius = [4, 4, 0, 0]
+                      } else if (key === lastPositiveKey) {
+                        radius = [4, 4, 0, 0]
+                      }
+                      return (
                         <Bar
                           key={key}
                           dataKey={key}
                           stackId="stack"
                           fill={color}
-                          radius={idx === arr.length - 1 ? [4, 4, 0, 0] : [0, 0, 0, 0]}
+                          radius={radius}
                           maxBarSize={32}
                         />
-                      ))
+                      )
+                    })
                   })()}
-                </BarChart>
+                  {meta.type === 'net_worth' && (
+                    <Line
+                      type="monotone"
+                      dataKey="value"
+                      name={t('reports.netWorth', { defaultValue: 'Net Worth' })}
+                      stroke="#10B981"
+                      strokeWidth={2}
+                      strokeDasharray="6 3"
+                      dot={false}
+                      activeDot={{ r: 4, fill: '#10B981' }}
+                      isAnimationActive={false}
+                    />
+                  )}
+                </ComposedChart>
               </ResponsiveContainer>
             ) : (
               <p className="text-muted-foreground text-sm text-center py-16">
