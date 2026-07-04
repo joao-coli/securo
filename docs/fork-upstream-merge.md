@@ -91,6 +91,7 @@ Upstream and a fork must not use the **same Alembic revision numbers** for diffe
 |----------------|---------------|----------------------------------|
 | Workspaces     | `052`–`054`   | `055`–`058`                      |
 | 0.13.x         | `055`–`061`   | `062`–`065`                      |
+| 0.13.7         | `062`–`063`   | `066`–`069`                      |
 
 Check the graph:
 
@@ -122,15 +123,24 @@ docker compose run --rm backend sh -c "alembic stamp 045 && alembic upgrade head
 What this does:
 
 1. **`stamp 045`** — tells Alembic to treat the DB as at revision `045` (last shared revision before the collision).
-2. **`upgrade head`** — applies any missing upstream revisions, then fork funding migrations (currently `062`–`065`). Fork funding migrations are **idempotent**: they skip tables/columns/indexes that already exist.
+2. **`upgrade head`** — applies any missing upstream revisions, then fork funding migrations (currently `066`–`069` after the 0.13.7 merge). Fork funding migrations are **idempotent**: they skip tables/columns/indexes that already exist.
 
 If upstream added workspace migrations (`052`–`054`) since your last merge, a normal `alembic upgrade head` is usually enough — funding migrations were renumbered to follow `054`.
+
+If you previously merged the 0.13.x branch and your DB is currently at `065`, the new merge renumbered the funding migrations to `066`–`069` and Alembic will refuse to start with `Can't locate revision identified by '065'`. Update the version row directly and then upgrade:
+
+```bash
+docker compose exec db psql -U postgres -d securo \
+  -c "UPDATE alembic_version SET version_num='061';"
+docker compose run --rm backend sh -c "alembic upgrade head"
+# → 062_passkeys, 063_goal_asset_group_tracking, then no-op 066–069
+```
 
 Confirm:
 
 ```bash
 docker compose run --rm backend alembic current
-# 065 (head)
+# 069 (head)
 ```
 
 **Do not** use `stamp 045` on a database that never had fork funding migrations — use `alembic upgrade head` only.
