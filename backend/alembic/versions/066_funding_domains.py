@@ -1,7 +1,7 @@
 """funding domains
 
-Revision ID: 062
-Revises: 061
+Revision ID: 066
+Revises: 063
 Create Date: 2026-05-05
 """
 
@@ -11,8 +11,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "062"
-down_revision: Union[str, None] = "061"
+revision: str = "066"
+down_revision: Union[str, None] = "063"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

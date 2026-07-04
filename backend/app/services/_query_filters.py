@@ -60,6 +60,31 @@ def credit_card_bill_scope(
     return or_(*predicates)
 
 
+def reporting_date_col(accounting_mode: str):
+    """The date column a transaction should be *bucketed by* in period
+    aggregations (dashboard, reports, budgets).
+
+    Honors the manual credit-card cycle override (`effective_bill_date`)
+    FIRST — regardless of accounting mode — because that's the whole point
+    of the override: the user hand-corrected which invoice a purchase
+    belongs to (issue #92). When there's no override, fall back to
+    `effective_date` in accrual mode or the raw purchase `date` in cash
+    mode.
+
+    This mirrors the ordering used by the transaction list and the credit
+    card bill view, so a transaction lands in the same month everywhere the
+    user looks. Aggregations that skipped the override summed credit-card
+    spend under the purchase month instead of the invoice month (issue
+    #232).
+    """
+    base = (
+        Transaction.effective_date
+        if accounting_mode == "accrual"
+        else Transaction.date
+    )
+    return func.coalesce(Transaction.effective_bill_date, base)
+
+
 def counts_as_pnl():
     """SQL filter: True when a transaction should contribute to income/expense totals.
 
@@ -144,7 +169,10 @@ async def owner_split_offset_pnl(
             )
         )
     )
-    date_col = Transaction.effective_date if use_effective_date else Transaction.date
+    date_col = func.coalesce(
+        Transaction.effective_bill_date,
+        Transaction.effective_date if use_effective_date else Transaction.date,
+    )
 
     result = await session.execute(
         select(
@@ -228,7 +256,10 @@ async def owner_split_offset_by_category(
             )
         )
     )
-    date_col = Transaction.effective_date if use_effective_date else Transaction.date
+    date_col = func.coalesce(
+        Transaction.effective_bill_date,
+        Transaction.effective_date if use_effective_date else Transaction.date,
+    )
 
     result = await session.execute(
         select(
@@ -302,7 +333,10 @@ async def viewer_shared_pnl(
         GroupMember.linked_user_id == user_id,
         GroupMember.is_self.is_(False),
     )
-    date_col = Transaction.effective_date if use_effective_date else Transaction.date
+    date_col = func.coalesce(
+        Transaction.effective_bill_date,
+        Transaction.effective_date if use_effective_date else Transaction.date,
+    )
 
     result = await session.execute(
         select(
@@ -386,7 +420,10 @@ async def viewer_shared_spending_by_category(
         GroupMember.linked_user_id == user_id,
         GroupMember.is_self.is_(False),
     )
-    date_col = Transaction.effective_date if use_effective_date else Transaction.date
+    date_col = func.coalesce(
+        Transaction.effective_bill_date,
+        Transaction.effective_date if use_effective_date else Transaction.date,
+    )
 
     result = await session.execute(
         select(

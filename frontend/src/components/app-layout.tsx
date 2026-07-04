@@ -59,10 +59,12 @@ import {
   Shield,
   ShieldCheck,
   Wallet,
+  Fingerprint,
 } from 'lucide-react'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { ChangePasswordDialog } from '@/components/change-password-dialog'
 import { TwoFactorSetup } from '@/components/two-factor-setup'
+import { PasskeyManagementDialog } from '@/components/passkey-management-dialog'
 import { CommandPalette } from '@/components/command-palette'
 import { useCommandPaletteHotkey } from '@/hooks/use-command-palette-hotkey'
 import { GlobalChatPanel } from '@/components/global-chat-panel'
@@ -117,6 +119,7 @@ export function AppLayout() {
   const { privacyMode, togglePrivacyMode, mask } = usePrivacyMode()
   const [changePasswordOpen, setChangePasswordOpen] = useState(false)
   const [twoFactorOpen, setTwoFactorOpen] = useState(false)
+  const [passkeysOpen, setPasskeysOpen] = useState(false)
   const [backingUp, setBackingUp] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [chatOpen, setChatOpen] = useState(false)
@@ -262,6 +265,7 @@ export function AppLayout() {
             logout={logout}
             onChangePassword={() => setChangePasswordOpen(true)}
             onTwoFactor={() => setTwoFactorOpen(true)}
+            onPasskeys={() => setPasskeysOpen(true)}
             agentsEnabled={agentsEnabled}
             backingUp={backingUp}
             onBackup={async () => {
@@ -512,6 +516,7 @@ export function AppLayout() {
               backingUp={backingUp}
               onChangePassword={() => setChangePasswordOpen(true)}
               onTwoFactor={() => setTwoFactorOpen(true)}
+              onPasskeys={() => setPasskeysOpen(true)}
               onBackup={async () => {
                 setBackingUp(true)
                 try {
@@ -561,6 +566,10 @@ export function AppLayout() {
         open={twoFactorOpen}
         onClose={() => setTwoFactorOpen(false)}
       />
+      <PasskeyManagementDialog
+        open={passkeysOpen}
+        onClose={() => setPasskeysOpen(false)}
+      />
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {/* Slide-over global chat — opened from the sidebar pill or via
           ⌘J. The previous floating bottom-right button was removed
@@ -579,6 +588,7 @@ function UserMenu({
   logout,
   onChangePassword,
   onTwoFactor,
+  onPasskeys,
   onBackup,
   backingUp,
   dark,
@@ -589,6 +599,7 @@ function UserMenu({
   logout: () => void
   onChangePassword: () => void
   onTwoFactor: () => void
+  onPasskeys: () => void
   onBackup: () => void
   backingUp: boolean
   dark?: boolean
@@ -643,6 +654,13 @@ function UserMenu({
           {t('auth.twoFactorTitle')}
         </DropdownMenuItem>
         <DropdownMenuItem
+          onClick={onPasskeys}
+          className="flex items-center gap-2"
+        >
+          <Fingerprint size={14} />
+          {t('auth.passkeysTitle')}
+        </DropdownMenuItem>
+        <DropdownMenuItem
           disabled={backingUp}
           onClick={onBackup}
           className="flex items-center gap-2"
@@ -672,6 +690,33 @@ function UserMenu({
               <DropdownMenuLabel className="px-2 py-1 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-muted-foreground/70">
                 {t('setup.language')}
               </DropdownMenuLabel>
+              <DropdownMenuItem
+                onClick={() => i18n.changeLanguage('ru')}
+                className="flex items-center gap-2"
+              >
+                <span className="flex-1">Русский</span>
+                {currentLang === 'ru' && (
+                  <Check size={13} className="text-primary" />
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => i18n.changeLanguage('de')}
+                className="flex items-center gap-2"
+              >
+                <span className="flex-1">Deutsch</span>
+                {currentLang === 'de' && (
+                  <Check size={13} className="text-primary" />
+                )}
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => i18n.changeLanguage('uk')}
+                className="flex items-center gap-2"
+              >
+                <span className="flex-1">Українська</span>
+                {currentLang === 'uk' && (
+                  <Check size={13} className="text-primary" />
+                )}
+              </DropdownMenuItem>
               <DropdownMenuItem
                 onClick={() => i18n.changeLanguage('pt-BR')}
                 className="flex items-center gap-2"

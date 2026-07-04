@@ -4,6 +4,8 @@ import type {
   User,
   AdminUser,
   AdminUserList,
+  Passkey,
+  PasskeyOptionsResponse,
   AppSetting,
   Category,
   CategoryGroup,
@@ -29,6 +31,8 @@ import type {
   Budget,
   BudgetVsActual,
   Rule,
+  RuleExportPayload,
+  RuleImportResponse,
   ImportLog,
   ImportPreviewTransaction,
   Workspace,
@@ -193,6 +197,59 @@ export const auth = {
   },
   verify2fa: async (tempToken: string, code: string): Promise<{ access_token: string; token_type: string }> => {
     const { data } = await api.post('/auth/2fa/verify', { temp_token: tempToken, code })
+    return data
+  },
+  listPasskeys: async (): Promise<Passkey[]> => {
+    const { data } = await api.get('/auth/passkeys')
+    return data
+  },
+  registerPasskeyOptions: async (name: string): Promise<PasskeyOptionsResponse> => {
+    const { data } = await api.post('/auth/passkeys/register/options', { name })
+    return data
+  },
+  verifyPasskeyRegistration: async (
+    challengeId: string,
+    name: string,
+    credential: Record<string, unknown>,
+  ): Promise<Passkey> => {
+    const { data } = await api.post('/auth/passkeys/register/verify', {
+      challenge_id: challengeId,
+      name,
+      credential,
+    })
+    return data
+  },
+  deletePasskey: async (id: string): Promise<void> => {
+    await api.delete(`/auth/passkeys/${id}`)
+  },
+  passkeyAuthenticationOptions: async (email?: string): Promise<PasskeyOptionsResponse> => {
+    const { data } = await api.post('/auth/passkeys/authenticate/options', { email })
+    return data
+  },
+  verifyPasskeyAuthentication: async (
+    challengeId: string,
+    credential: Record<string, unknown>,
+  ): Promise<{ access_token: string; token_type: string }> => {
+    const { data } = await api.post('/auth/passkeys/authenticate/verify', {
+      challenge_id: challengeId,
+      credential,
+    })
+    return data
+  },
+  passkeySecondFactorOptions: async (tempToken: string): Promise<PasskeyOptionsResponse> => {
+    const { data } = await api.post('/auth/passkeys/2fa/options', { temp_token: tempToken })
+    return data
+  },
+  verifyPasskeySecondFactor: async (
+    tempToken: string,
+    challengeId: string,
+    credential: Record<string, unknown>,
+  ): Promise<{ access_token: string; token_type: string }> => {
+    const { data } = await api.post('/auth/passkeys/2fa/verify', {
+      temp_token: tempToken,
+      challenge_id: challengeId,
+      credential,
+    })
     return data
   },
   oidcConfig: async (): Promise<{ enabled: boolean; provider_name: string }> => {
@@ -645,8 +702,9 @@ export const transactions = {
 
 // Payees
 export const payees = {
-  list: async (): Promise<Payee[]> => {
-    const { data } = await api.get('/payees')
+  list: async (params?: { q?: string; type?: string; is_favorite?: boolean } | Record<string, unknown>): Promise<Payee[]> => {
+    const cleanParams = params && !('queryKey' in params) ? params : undefined
+    const { data } = await api.get('/payees', { params: cleanParams })
     return data
   },
   get: async (id: string): Promise<Payee> => {
@@ -810,7 +868,7 @@ export const rules = {
     const { data } = await api.post('/rules', rule)
     return data
   },
-  update: async (id: string, rule: Partial<Rule>): Promise<Rule> => {
+  update: async (id: string, rule: Partial<Rule>): Promise<Rule & { applied_count: number }> => {
     const { data } = await api.patch(`/rules/${id}`, rule)
     return data
   },
@@ -819,6 +877,22 @@ export const rules = {
   },
   applyAll: async (): Promise<{ applied: number }> => {
     const { data } = await api.post('/rules/apply-all')
+    return data
+  },
+  exportFile: async (): Promise<void> => {
+    const { data } = await api.get('/rules/export', { responseType: 'blob' })
+    const blob = new Blob([data], { type: 'application/json;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `securo-categorization-rules-${new Date().toISOString().slice(0, 10)}.json`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+  },
+  importFile: async (payload: RuleExportPayload, overwrite = false): Promise<RuleImportResponse> => {
+    const { data } = await api.post('/rules/import', { payload, overwrite })
     return data
   },
   packs: async (): Promise<{ code: string; name: string; flag: string; rule_count: number; installed: boolean }[]> => {
@@ -1242,7 +1316,7 @@ export const search = {
 
 // App-level feature flags (whether optional modules like agents are mounted)
 export interface AppInfo {
-  features: { agents: boolean }
+  features: { agents: boolean; tesouro_direto?: boolean }
 }
 
 export const info = {

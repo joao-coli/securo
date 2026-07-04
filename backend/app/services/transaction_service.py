@@ -23,7 +23,7 @@ from app.services.credit_card_service import apply_effective_date
 from app.services.funding_domain_service import get_assignable_funding_domain
 from app.services.rule_service import apply_rules_to_transaction
 from app.services.fx_rate_service import stamp_primary_amount, convert as fx_convert
-from app.services._query_filters import counts_as_pnl
+from app.services._query_filters import counts_as_pnl, reporting_date_col
 
 
 def _apply_fx_override(transaction, amount, amount_primary=None, fx_rate_used=None):
@@ -95,11 +95,10 @@ async def get_transactions(
     # line up with the cash-flow view used by the dashboard and reports.
     # When the user has set a manual cycle override (effective_bill_date)
     # we honor it FIRST regardless of accounting mode — that's the whole
-    # point of the override (issue #92, LucasFidelis suggestion).
-    date_col = func.coalesce(
-        Transaction.effective_bill_date,
-        Transaction.effective_date if accounting_mode == "accrual" else Transaction.date,
-    )
+    # point of the override (issue #92, LucasFidelis suggestion). Shared
+    # with the dashboard/report/budget aggregations so a transaction lands
+    # in the same month everywhere (issue #232).
+    date_col = reporting_date_col(accounting_mode)
 
     # Group-scope visibility: when the caller filters by a group they
     # have access to (owner or linked member), bypass the user-owns-it
@@ -894,7 +893,6 @@ async def link_existing_as_transfer(
     transfer_pair_id = uuid.uuid4()
     for tx in txns:
         tx.transfer_pair_id = transfer_pair_id
-        tx.category_id = None  # transfers are excluded from category reports
 
     await session.commit()
     for tx in txns:
@@ -973,9 +971,8 @@ async def create_transfer_counterpart(
     apply_effective_date(counterpart_tx, to_account)
     session.add(counterpart_tx)
 
-    # Link the anchor into the pair; transfers are excluded from category reports.
+    # Link the anchor into the pair; reports exclude transfer_pair_id.
     anchor.transfer_pair_id = transfer_pair_id
-    anchor.category_id = None
 
     await session.flush()
     await stamp_primary_amount(session, user_id, counterpart_tx)
@@ -1097,9 +1094,9 @@ async def update_transaction(
         await get_assignable_funding_domain(session, new_funding_domain_id, user_id)
 
     # Pop FX override fields before generic setattr loop
+    has_fx_override = "amount_primary" in update_data or "fx_rate_used" in update_data
     override_amount_primary = update_data.pop("amount_primary", None)
     override_fx_rate = update_data.pop("fx_rate_used", None)
-    has_fx_override = override_amount_primary is not None or override_fx_rate is not None
 
     restamp_fields = {"amount", "currency", "date"}
     needs_restamp = bool(restamp_fields & update_data.keys())
@@ -1108,12 +1105,17 @@ async def update_transaction(
         setattr(transaction, key, value)
 
     if has_fx_override:
-        _apply_fx_override(
-            transaction,
-            transaction.amount,
-            override_amount_primary,
-            override_fx_rate,
-        )
+        if override_amount_primary is None and override_fx_rate is None:
+            transaction.amount_primary = None
+            transaction.fx_rate_used = None
+            await stamp_primary_amount(session, user_id, transaction)
+        else:
+            _apply_fx_override(
+                transaction,
+                transaction.amount,
+                override_amount_primary,
+                override_fx_rate,
+            )
     elif needs_restamp:
         await stamp_primary_amount(session, user_id, transaction)
 

@@ -38,6 +38,7 @@ import {
 import type { Rule, RuleAction, Transaction } from '@/types'
 import { RuleDialog, type RuleDialogInitialData } from '@/components/rule-dialog'
 import { PageHeader } from '@/components/page-header'
+import { calculateRangeSelection } from '@/lib/selection-utils'
 import { CategoryIcon } from '@/components/category-icon'
 import { CategorySelect } from '@/components/category-select'
 import { TransactionDialog, extractApiError, type SaveAction } from '@/components/transaction-dialog'
@@ -164,6 +165,7 @@ export default function TransactionsPage() {
   const [transferDialogOpen, setTransferDialogOpen] = useState(false)
   const [linkTransferDialogOpen, setLinkTransferDialogOpen] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null)
   const grid = useTransactionsGridState()
   const [bulkCategory, setBulkCategory] = useState<string>('')
   const [bulkAddToGroupOpen, setBulkAddToGroupOpen] = useState(false)
@@ -271,6 +273,7 @@ export default function TransactionsPage() {
   // Clear selection on page/filter change
   useEffect(() => {
     setSelectedIds(new Set())
+    setLastSelectedId(null)
     setBulkCategory('')
   }, [page, filterAccountIds, filterCategoryIds, filterUncategorized, filterPayee, filterType, filterFrom, filterTo, filterMinAmount, filterMaxAmount, searchQuery])
 
@@ -587,11 +590,17 @@ export default function TransactionsPage() {
 
   const createRuleMutation = useMutation({
     mutationFn: (data: Omit<Rule, 'id' | 'user_id'>) => rulesApi.create(data),
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['rules'] })
       setCreateRuleOpen(false)
       setCreateRuleInitialData(undefined)
-      toast.success(t('rules.created'))
+      const applied = result.applied_count ?? 0
+      if (applied > 0) {
+        invalidateAfterTxMutation()
+        toast.success(t('rules.createdAndApplied', { count: applied }))
+      } else {
+        toast.success(t('rules.created'))
+      }
     },
     onError: (error: unknown) => {
       const err = error as { response?: { status?: number } }
@@ -621,13 +630,11 @@ export default function TransactionsPage() {
     setCreateRuleOpen(true)
   }
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const toggleSelect = (id: string, isShiftKey: boolean = false) => {
+    setSelectedIds(prev =>
+      calculateRangeSelection(prev, lastSelectedId, id, filteredItems, isShiftKey, tx => !tx.is_shared)
+    )
+    setLastSelectedId(id)
   }
 
   // Tag filtering is now applied server-side, so the visible list and the
@@ -1337,8 +1344,11 @@ export default function TransactionsPage() {
                       <input
                         type="checkbox"
                         checked={selectedIds.has(tx.id)}
-                        onChange={() => toggleSelect(tx.id)}
-                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => {}}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          toggleSelect(tx.id, e.shiftKey)
+                        }}
                         className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
                       />
                     )}

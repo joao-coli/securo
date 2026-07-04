@@ -160,6 +160,7 @@
     "forgotPassword": "¿Olvidaste tu contraseña?",
     "loginDescription": "Inicia sesión para acceder a tu cuenta",
     "invalidCredentials": "Correo o contraseña inválidos",
+    "serverError": "No se pudo conectar con el servidor. Comprueba tu conexión o que el backend esté en ejecución e inténtalo de nuevo.",
     "noAccount": "¿No tienes una cuenta?",
     "hasAccount": "¿Ya tienes una cuenta?",
     "changePassword": "Cambiar contraseña",
@@ -189,7 +190,34 @@
     "twoFactorEnabled": "Autenticación de dos factores activada",
     "twoFactorDisabled": "Autenticación de dos factores desactivada",
     "or": "o",
-    "loginWithProvider": "Continuar con {{provider}}"
+    "loginWithProvider": "Continuar con {{provider}}",
+    "loginWithPasskey": "Continuar con llave de acceso",
+    "passkeyLoginError": "No se pudo iniciar sesión con esa llave de acceso",
+    "passkeyCancelled": "Se canceló la solicitud de la llave de acceso",
+    "passkeyMethod": "Llave de acceso",
+    "totpMethod": "Código autenticador",
+    "usePasskeySecondFactor": "Usar llave de seguridad/acceso",
+    "passkeySecondFactorTitle": "Verificación con llave de seguridad",
+    "passkeySecondFactorDescription": "Usa tu llave de seguridad o llave de acceso del dispositivo para aprobar este inicio de sesión.",
+    "passkeySecondFactorPrompt": "Haz clic en el botón de abajo y sigue la solicitud de llave de seguridad del navegador.",
+    "passkeysTitle": "Llaves de acceso",
+    "passkeysDescription": "Usa llaves de seguridad o llaves de acceso del dispositivo para iniciar sesión sin introducir la contraseña. Las llaves registradas también protegen el inicio con contraseña como segundo factor; el inicio solo con llave omite el código autenticador porque la llave ya verifica la posesión.",
+    "passkeyUnsupported": "Las llaves de acceso requieren un navegador compatible y una conexión HTTPS segura o localhost.",
+    "passkeyLoadError": "No se pudieron cargar las llaves de acceso",
+    "passkeyName": "Nombre de la llave de acceso",
+    "passkeyNamePlaceholder": "p. ej. YubiKey, Touch ID de MacBook",
+    "defaultPasskeyName": "Llave de acceso",
+    "addPasskey": "Añadir llave de acceso",
+    "passkeyAdded": "Llave de acceso añadida",
+    "passkeyDeleted": "Llave de acceso eliminada",
+    "passkeyRegisterError": "No se pudo añadir la llave de acceso",
+    "passkeyDeleteError": "No se pudo eliminar la llave de acceso",
+    "passkeyDeleteConfirm": "¿Eliminar la llave de acceso \"{{name}}\"?",
+    "noPasskeys": "Aún no hay llaves de acceso registradas.",
+    "deletePasskey": "Eliminar llave de acceso",
+    "passkeyCreated": "Creada",
+    "passkeyLastUsed": "Último uso",
+    "passkeyNeverUsed": "Nunca"
   },
   "dashboard": {
     "title": "Inicio",
@@ -251,6 +279,8 @@
   "transactions": {
     "title": "Transacciones",
     "section": "Financiero",
+    "monthPrevious": "Mes anterior",
+    "monthNext": "Mes siguiente",
     "description": "Descripción",
     "amount": "Importe",
     "status": "Estado",
@@ -258,9 +288,22 @@
     "category": "Categoría",
     "account": "Cuenta",
     "noCategory": "Sin categoría",
+    "searchCategory": "Buscar categoría...",
+    "noCategoryFound": "No se encontraron categorías.",
     "addManual": "Agregar transacción",
     "duplicate": "Duplicar",
     "createRule": "Crear regla",
+    "ruleActions": "Acciones de regla",
+    "addToExistingRule": "Agregar a regla existente",
+    "addToExistingRuleTitle": "Agregar transacción a una regla",
+    "addToExistingRuleDescription": "Elige una regla de categoría activa y agrega la descripción de esta transacción como otra coincidencia futura.",
+    "existingRule": "Regla existente",
+    "matchOperator": "Tipo de coincidencia",
+    "matchText": "Coincidencia en descripción",
+    "assignRule": "Agregar a regla",
+    "noExistingRules": "No hay reglas de categoría activas disponibles",
+    "addedToExistingRule": "Regla actualizada. Las próximas coincidencias usarán esta categoría.",
+    "duplicateRuleCondition": "Esa regla ya incluye esta coincidencia.",
     "saveAndNew": "Guardar y nuevo",
     "saveAndDuplicate": "Guardar y duplicar",
     "moreSaveOptions": "Más opciones de guardado",
@@ -430,7 +473,10 @@
         "last90": "Últimos 90 días",
         "thisYear": "Este año"
       }
-    }
+    },
+    "bulkAddTags": "Añadir etiquetas",
+    "addTagsPlaceholder": "#etiqueta…",
+    "clearOverride": "Borrar anulación"
   },
   "accounts": {
     "title": "Cuentas",
@@ -659,7 +705,11 @@
     "viewAll": "Ver todos los objetivos",
     "dashboardTitle": "Progreso de objetivos",
     "noTargetDate": "Sin fecha límite",
-    "dashboardEmpty": "Aún no hay objetivos. Define una meta y empieza a seguir tu progreso."
+    "dashboardEmpty": "Aún no hay objetivos. Define una meta y empieza a seguir tu progreso.",
+    "trackingWallet": "Cartera",
+    "wallet": "Cartera",
+    "selectWallet": "Seleccionar cartera",
+    "walletHint": "Sigue este objetivo con el valor combinado de todos los activos en la cartera seleccionada."
   },
   "recurring": {
     "title": "Transacciones recurrentes",
@@ -711,6 +761,7 @@
     "add": "Agregar",
     "created": "Regla creada",
     "createdAndApplied": "Regla creada y aplicada a {{count}} transacciones",
+    "updatedAndApplied": "Regla actualizada y aplicada a {{count}} transacciones",
     "updated": "Regla actualizada",
     "deleted": "Regla eliminada",
     "applied": "Reglas aplicadas a {{count}} transacciones",
@@ -759,7 +810,16 @@
     "sortLabel": "Ordenar por",
     "sortBy_priority": "Prioridad",
     "sortBy_name": "Nombre",
-    "sortBy_category": "Categoría"
+    "sortBy_category": "Categoría",
+    "export": "Export",
+    "import": "Import",
+    "exported": "Rules export downloaded",
+    "imported": "Imported {{imported}} rules ({{skipped}} skipped)",
+    "invalidImportFile": "Invalid rules import file",
+    "importConfirmTitle": "Import categorization rules?",
+    "importConfirmDescription": "File {{file}} contains {{count}} rules.",
+    "importOverwriteWarning": "Importing will overwrite your current categorization rules. This cannot be undone.",
+    "confirmOverwriteImport": "Overwrite and import"
   },
   "categories": {
     "title": "Categorías",
@@ -1032,6 +1092,7 @@
     "cashFlow": "Flujo de caja",
     "comingSoon": "(próximamente)",
     "composition": "Composición",
+    "asOf": "a fecha de {{date}}",
     "evolution": "Evolución",
     "income": "Ingresos",
     "expenses": "Gastos",
@@ -1040,7 +1101,18 @@
     "detailed": "Detallado",
     "byIncome": "Por ingresos",
     "byExpenses": "Por gastos",
+    "net": "Neto",
+    "assetsAndAccounts": "Activos y Cuentas",
+    "youOwn": "Lo que tienes",
+    "youOwe": "Lo que debes",
+    "youOwned": "Lo que tenías",
+    "youOwed": "Lo que debías",
     "other": "Otro",
+    "otherAccounts": "Otras Cuentas",
+    "otherAssets": "Otros Activos",
+    "otherLiabilities": "Otros Pasivos",
+    "otherIncome": "Otros Ingresos",
+    "otherExpenses": "Otros Gastos",
     "uncategorized": "Sin categorizar",
     "categoryTrends": "Tendencias por categoría",
     "today": "Hoy",
@@ -1048,7 +1120,16 @@
     "forecastBaseline": "Pronóstico con estimación",
     "includeEstimate": "Incluir estimación",
     "includeEstimateHelp": "Estima entradas y salidas futuras a partir del promedio de tu historial (hasta 12 meses, o todos los datos disponibles), en lugar de usar tus reglas recurrentes",
-    "baseline": "Estimación"
+    "baseline": "Estimación",
+    "surplus": "Superávit",
+    "deficit": "Déficit",
+    "cashFlowNode": "Flujo de caja",
+    "flowChartAria": "Diagrama de flujo de caja: ingresos que fluyen hacia los gastos",
+    "category": "Categoría",
+    "amount": "Importe",
+    "investments": "Inversiones",
+    "moneyMap": "Mapa del Dinero",
+    "range30d": "30D"
   },
   "payees": {
     "title": "Beneficiarios",
@@ -1080,7 +1161,10 @@
     "merged": "Beneficiarios fusionados ({{count}} transacciones reasignadas)",
     "typeMerchant": "Comerciante",
     "typePerson": "Persona",
-    "typeCompany": "Empresa"
+    "typeCompany": "Empresa",
+    "allTypes": "Todos los tipos",
+    "filterByType": "Filtrar por tipo",
+    "favoritesOnly": "Solo favoritos"
   },
   "common": {
     "save": "Guardar",
@@ -1099,7 +1183,9 @@
     "noIconsFound": "No se encontraron iconos",
     "primaryCurrency": "Moneda principal",
     "showLess": "Mostrar menos",
-    "showMore": "+{{count}} más"
+    "showMore": "+{{count}} más",
+    "previous": "Anterior",
+    "next": "Siguiente"
   },
   "splitGroups": {
     "title": "Grupos",
@@ -1404,7 +1490,9 @@
       "manageConnections": "gestionar",
       "willUseConnectionDefault": "Usará el valor predeterminado de la conexión: {{model}}",
       "autoContext": "Inyectar automáticamente contexto de cuenta",
-      "autoContextHint": "Antepone una pequeña introducción con tu nombre, moneda, la fecha de hoy y la lista de cuentas al inicio de cada conversación. Evita que el agente tenga que preguntarlo. Desactívalo para agentes puramente basados en conocimiento."
+      "autoContextHint": "Antepone una pequeña introducción con tu nombre, moneda, la fecha de hoy y la lista de cuentas al inicio de cada conversación. Evita que el agente tenga que preguntarlo. Desactívalo para agentes puramente basados en conocimiento.",
+      "isDefault": "Agente predeterminado",
+      "isDefaultHint": "Usado por el chat lateral global (⌘J). Solo un agente puede ser el predeterminado: al activar esto se desactiva en los demás."
     },
     "detail": {
       "notFound": "Agente no encontrado.",
@@ -1533,6 +1621,43 @@
       "empty": {
         "title": "Aún no hay conexiones",
         "subtitle": "Añade una conexión para apuntar Securo a tu Ollama local, OpenAI, Anthropic o cualquier endpoint compatible con OpenAI."
+      }
+    },
+    "newConversation": "Nueva conversación",
+    "conversationsCount": "Conversaciones",
+    "knowledgeCount": "Archivos de conocimiento",
+    "defaultBadge": "Predeterminado",
+    "defaultLabel": "Predeterminado",
+    "globalChat": {
+      "title": "Chat",
+      "openHint": "Abrir chat",
+      "history": "Conversaciones recientes",
+      "selectAgent": "Seleccionar agente",
+      "openSettings": "Ajustes del agente",
+      "empty": "Elige un agente y empieza una conversación con tus datos financieros.",
+      "openAgents": "Ir a Agentes",
+      "noConversations": "Aún no hay conversaciones."
+    },
+    "mcpExternal": {
+      "title": "Acceso MCP externo",
+      "subtitle": "Conecta un agente externo (Claude Desktop, ChatGPT, n8n, un cliente personalizado) al servidor MCP integrado de Securo. El token de abajo está limitado a tu usuario y caduca en {{days}} días.",
+      "copy": "Copiar",
+      "copied": "Copiado",
+      "copyFailed": "Error al copiar",
+      "mint": "Generar token",
+      "minting": "Generando…",
+      "mintFailed": "No se pudo generar el token",
+      "warning": "Cópialo ahora: Securo no almacena el token, así que no podremos volver a mostrarlo. Revócalo rotando AGENTS_MCP_JWT_SECRET.",
+      "regenerate": "Generar otro",
+      "snippets": {
+        "token": "Token",
+        "url": "Endpoint MCP",
+        "curl": "Ejemplo con curl",
+        "clientConfig": "Integración con el cliente"
+      },
+      "clients": {
+        "claude": "Claude Desktop / Code / Cursor",
+        "openai": "OpenAI Responses API"
       }
     }
   }

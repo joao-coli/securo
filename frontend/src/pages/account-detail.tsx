@@ -25,6 +25,7 @@ import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { cn } from '@/lib/utils'
 import { useWorkspace } from '@/contexts/workspace-context'
+import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
 import {
   AreaChart,
   Area,
@@ -128,7 +129,7 @@ function creditCardCycleLabel(
   dueDay: number | null | undefined,
   i18nLanguage: string,
 ): string {
-  const dateFnsLocale = i18nLanguage === 'pt-BR' ? ptBR : enUS
+  const dateFnsLocale = resolveDateFnsLocale(i18nLanguage)
   const to = parseISO(filterTo + 'T00:00:00')
   if (!dueDay) {
     return format(to, 'MMM yyyy', { locale: dateFnsLocale })
@@ -969,7 +970,7 @@ export default function AccountDetailPage() {
                   >
                     {activeBill
                       ? format(parseISO(activeBill.due_date + 'T00:00:00'), 'MMM yyyy', {
-                          locale: i18n.language === 'pt-BR' ? ptBR : enUS,
+                          locale: resolveDateFnsLocale(i18n.resolvedLanguage ?? i18n.language),
                         })
                       : creditCardCycleLabel(filterTo, account?.payment_due_day, i18n.language)}
                   </button>
@@ -1084,7 +1085,7 @@ export default function AccountDetailPage() {
 
       {/* Bill timeline (last 6 cycles) — only for CC with cycle metadata */}
       {isCreditCard && timelineCycles.length > 0 && (() => {
-        const dfLocale = i18n.language === 'pt-BR' ? ptBR : enUS
+        const dfLocale = resolveDateFnsLocale(i18n.resolvedLanguage ?? i18n.language)
         const totals = timelineQueries.map((q, i) => {
           const c = timelineCycles[i]
           // Single source of truth: live debit sum from the summary endpoint,
@@ -1204,7 +1205,7 @@ export default function AccountDetailPage() {
         const deltaPct = showComparison ? ((billTotal - prevTotal) / prevTotal) * 100 : null
         const prevCycleLabel = prevLabelBill
           ? format(parseISO(prevLabelBill.due_date + 'T00:00:00'), 'MMM yyyy', {
-              locale: i18n.language === 'pt-BR' ? ptBR : enUS,
+              locale: resolveDateFnsLocale(i18n.resolvedLanguage ?? i18n.language),
             })
           : previousCycle
             ? creditCardCycleLabel(previousCycle.end, account.payment_due_day, i18n.language)

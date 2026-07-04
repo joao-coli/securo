@@ -1,5 +1,7 @@
-from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from urllib.parse import urlparse
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -36,12 +38,31 @@ class Settings(BaseSettings):
     # Frontend
     frontend_url: str = "http://localhost:5173"
 
+    # WebAuthn / passkeys
+    webauthn_rp_name: str = "Securo"
+    # Empty means derive from frontend_url host, e.g. localhost for http://localhost:5173.
+    webauthn_rp_id: str = ""
+    # Empty means use frontend_url. Must match the browser origin exactly.
+    webauthn_origin: str = ""
+    webauthn_challenge_ttl_seconds: int = 300
+
+    @property
+    def resolved_webauthn_origin(self) -> str:
+        return self.webauthn_origin or self.frontend_url
+
+    @property
+    def resolved_webauthn_rp_id(self) -> str:
+        if self.webauthn_rp_id:
+            return self.webauthn_rp_id
+        parsed = urlparse(self.frontend_url)
+        return parsed.hostname or "localhost"
+
     # Defaults
     default_currency: str = "USD"  # fallback currency when user preference is unavailable
 
     # FX Rates
     openexchangerates_app_id: str = ""
-    supported_currencies: str = "USD,EUR,GBP,BRL,CAD,AUD,CHF,ARS,JPY,MXN,INR,SEK,DKK,NOK,PLN,CZK,HUF,RON,CRC,IDR,COP,CLP,DOP"  # comma-separated list
+    supported_currencies: str = "USD,EUR,GBP,BRL,CAD,AUD,CHF,ARS,JPY,MXN,INR,SEK,DKK,NOK,PLN,CZK,HUF,RON,CRC,IDR,COP,CLP,DOP,RUB,GTQ,PHP"  # comma-separated list
     fx_sync_mode: str = "on_demand"  # "on_demand" or "scheduled"
 
     # Storage
@@ -85,6 +106,14 @@ class Settings(BaseSettings):
     # key or third-party account is required. Defaults to 128×128 which
     # is what Google's favicon service caps at before upscaling.
     logo_size: int = 128
+
+    # Brazilian Treasury bond prices (official Tesouro Transparente CSV).
+    # On by default since most users are Brazilian; the official CSV is only
+    # fetched when someone actually searches a bond, and the UI pre-warm is
+    # gated to Brazilian users, so non-Brazilian installs pay ~zero cost.
+    # Set TESOURO_DIRETO_ENABLED=false to fully disable (e.g. to avoid the
+    # external dependency on the Brazilian government endpoint).
+    tesouro_direto_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env")
 
