@@ -42,7 +42,7 @@ import { usePrivacyMode } from '@/hooks/use-privacy-mode'
 import { useAuth } from '@/contexts/auth-context'
 import { useCollectionFilter } from '@/contexts/collection-filter-context'
 import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
-import type { Rule, Transaction } from '@/types'
+import type { Rule, RuleAction, Transaction } from '@/types'
 
 function formatCurrency(value: number, currency = 'USD', locale = 'en-US') {
   return new Intl.NumberFormat(locale, { style: 'currency', currency }).format(value)
@@ -236,7 +236,7 @@ export default function DashboardPage() {
     if (tx.payee_id) {
       conditions.push({ field: 'payee_id', op: 'equals', value: tx.payee_id })
     }
-    const actions = tx.category_id
+    const actions: RuleAction[] = tx.category_id
       ? [{ op: 'set_category', value: tx.category_id }]
       : [{ op: 'set_category', value: '' }]
     const tags = parseHashtags(tx.notes)
