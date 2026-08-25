@@ -1,9 +1,11 @@
 import uuid
 from datetime import date as _Date
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
+
+WeekendAdjustment = Literal["none", "previous_friday", "next_monday"]
 
 
 class RecurringTransactionCreate(BaseModel):
@@ -11,7 +13,8 @@ class RecurringTransactionCreate(BaseModel):
     amount: Decimal
     currency: str = "USD"
     type: str  # debit, credit
-    frequency: str  # monthly, weekly, yearly
+    frequency: str  # weekly, monthly, quarterly, yearly
+    weekend_adjustment: WeekendAdjustment = "none"
     day_of_month: Optional[int] = None
     start_date: _Date
     end_date: Optional[_Date] = None
@@ -19,6 +22,7 @@ class RecurringTransactionCreate(BaseModel):
     category_id: Optional[uuid.UUID] = None
     funding_domain_id: Optional[uuid.UUID] = None
     skip_first: bool = False  # Set true when first occurrence already created as a transaction
+    auto_generate: bool = True  # Materialize occurrences; when false, wait for the real charge
 
 
 class RecurringTransactionUpdate(BaseModel):
@@ -26,7 +30,8 @@ class RecurringTransactionUpdate(BaseModel):
     amount: Optional[Decimal] = None
     currency: Optional[str] = None
     type: Optional[str] = None
-    frequency: Optional[str] = None
+    frequency: Optional[str] = None  # weekly, monthly, quarterly, yearly
+    weekend_adjustment: Optional[WeekendAdjustment] = None
     day_of_month: Optional[int] = None
     start_date: Optional[_Date] = None
     end_date: Optional[_Date] = None
@@ -34,6 +39,7 @@ class RecurringTransactionUpdate(BaseModel):
     category_id: Optional[uuid.UUID] = None
     funding_domain_id: Optional[uuid.UUID] = None
     is_active: Optional[bool] = None
+    auto_generate: Optional[bool] = None
 
 
 class RecurringTransactionRead(BaseModel):
@@ -47,10 +53,12 @@ class RecurringTransactionRead(BaseModel):
     currency: str
     type: str
     frequency: str
+    weekend_adjustment: WeekendAdjustment = "none"
     day_of_month: Optional[int] = None
     start_date: _Date
     end_date: Optional[_Date] = None
     is_active: bool
+    auto_generate: bool = True
     next_occurrence: _Date
     amount_primary: Optional[float] = None
     fx_rate_used: Optional[float] = None

@@ -19,6 +19,7 @@ import { PageHeader } from '@/components/page-header'
 import { CategoryIcon } from '@/components/category-icon'
 import { IconPicker } from '@/components/icon-picker'
 import { cn } from '@/lib/utils'
+import { useWorkspace } from '@/contexts/workspace-context'
 import { Archive, Pencil, Plus, RotateCcw, Search } from 'lucide-react'
 import type { FundingDomain, FundingDomainCreate, FundingDomainUpdate } from '@/types'
 
@@ -27,6 +28,7 @@ const DEFAULT_COLOR = '#6B7280'
 
 export default function FundingDomainsPage() {
   const { t } = useTranslation()
+  const { current } = useWorkspace()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [includeInactive, setIncludeInactive] = useState(false)
@@ -36,8 +38,9 @@ export default function FundingDomainsPage() {
   const [formColor, setFormColor] = useState(DEFAULT_COLOR)
 
   const { data: domainsList, isLoading } = useQuery({
-    queryKey: ['funding-domains', { includeInactive }],
+    queryKey: ['funding-domains', current?.id, { includeInactive }],
     queryFn: () => fundingDomainsApi.list(includeInactive),
+    enabled: Boolean(current?.id),
   })
 
   const invalidateDomains = () => {

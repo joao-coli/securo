@@ -27,6 +27,7 @@ from app.providers.base import (
     HoldingData,
     InstitutionData,
     InstitutionListData,
+    ProviderNotConfiguredError,
     ProviderUserActionRequired,
     SessionExpiredError,
     TransactionData,
@@ -318,6 +319,26 @@ async def test_sync_fuzzy_matches_manual_transaction(session: AsyncSession, test
 
 
 @pytest.mark.asyncio
+async def test_sync_unregistered_provider_keeps_status(
+    session: AsyncSession, test_user, test_workspace,
+):
+    """A provider missing from the registry is a server misconfiguration (e.g.
+    the Celery worker not loading .env) — the connection must keep its status
+    instead of flipping to "error", which would show a misleading reconnect
+    banner for perfectly healthy credentials."""
+    conn = await _make_connection(session, test_user.id, "GhostBank")
+    conn_id = conn.id
+
+    with pytest.raises(ProviderNotConfiguredError, match="not configured"):
+        await sync_connection(session, conn_id, test_workspace.id, test_user.id)
+
+    refreshed = (await session.execute(
+        select(BankConnection).where(BankConnection.id == conn_id)
+    )).scalar_one()
+    assert refreshed.status == "active"
+
+
+@pytest.mark.asyncio
 async def test_sync_session_expired_marks_expired(session: AsyncSession, test_user, test_workspace):
     conn = await _make_connection(session, test_user.id, "ExpiredBank")
     mock_provider = AsyncMock()
@@ -334,7 +355,7 @@ async def test_sync_session_expired_marks_expired(session: AsyncSession, test_us
 
 
 @pytest.mark.asyncio
-async def test_sync_user_action_required_propagates_without_error_status(
+async def test_sync_user_action_required_marks_error_status(
     session: AsyncSession, test_user, test_workspace,
 ):
     conn = await _make_connection(session, test_user.id, "ActionBank")
@@ -348,11 +369,11 @@ async def test_sync_user_action_required_propagates_without_error_status(
         with pytest.raises(ProviderUserActionRequired):
             await sync_connection(session, conn_id, test_workspace.id, test_user.id)
 
-    # Connection status NOT flipped to error for this case.
+    # User-action failures are visible in the UI via the reconnect banner.
     refreshed = (await session.execute(
         select(BankConnection).where(BankConnection.id == conn_id)
     )).scalar_one()
-    assert refreshed.status == "active"
+    assert refreshed.status == "error"
 
 
 # ---------------------------------------------------------------------------

@@ -207,7 +207,7 @@ async def create_payment_allocation(
     canonical_payment, card_credit = await _validate_payment_transaction(
         session, workspace_id, data.payment_transaction_id, credit_card_account_id
     )
-    await get_assignable_funding_domain(session, data.funding_domain_id, user_id)
+    await get_assignable_funding_domain(session, data.funding_domain_id, workspace_id)
     bill = await _validate_bill(session, workspace_id, credit_card_account_id, data.bill_id)
     if data.amount <= Decimal("0"):
         raise ValueError("Allocation amount must be positive")
@@ -251,6 +251,7 @@ async def list_payment_allocations(
         .options(selectinload(CreditCardPaymentAllocation.funding_domain))
         .where(
             CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
+            Transaction.workspace_id == workspace_id,
         )
     )
     query = query.where(*_allocation_scope_filters(
@@ -360,11 +361,11 @@ async def update_payment_allocation(
     allocation_id: uuid.UUID,
     data: CreditCardPaymentAllocationUpdate,
 ) -> Optional[CreditCardPaymentAllocation]:
+    await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     result = await session.execute(
         select(CreditCardPaymentAllocation)
         .where(
             CreditCardPaymentAllocation.id == allocation_id,
-            CreditCardPaymentAllocation.user_id == user_id,
             CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
         )
     )
@@ -375,7 +376,7 @@ async def update_payment_allocation(
     if "funding_domain_id" in update_data:
         if update_data["funding_domain_id"] is None:
             raise ValueError("Funding domain is required")
-        await get_assignable_funding_domain(session, update_data["funding_domain_id"], user_id)
+        await get_assignable_funding_domain(session, update_data["funding_domain_id"], workspace_id)
     if "bill_id" in update_data:
         bill = await _validate_bill(session, workspace_id, credit_card_account_id, update_data["bill_id"])
         if bill is not None and "statement_due_date" not in update_data:
@@ -414,7 +415,6 @@ async def delete_payment_allocation(
     result = await session.execute(
         select(CreditCardPaymentAllocation).where(
             CreditCardPaymentAllocation.id == allocation_id,
-            CreditCardPaymentAllocation.user_id == user_id,
             CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
         )
     )
@@ -465,7 +465,13 @@ async def get_statement_funding_report(
             Transaction.funding_domain_id,
             FundingDomain,
         )
-        .outerjoin(FundingDomain, Transaction.funding_domain_id == FundingDomain.id)
+        .outerjoin(
+            FundingDomain,
+            and_(
+                Transaction.funding_domain_id == FundingDomain.id,
+                FundingDomain.workspace_id == workspace_id,
+            ),
+        )
         .where(*base_filters)
         .order_by(bucket_date, Transaction.created_at)
     )
@@ -489,6 +495,7 @@ async def get_statement_funding_report(
 
     allocation_filters = [
         CreditCardPaymentAllocation.credit_card_account_id == credit_card_account_id,
+        Transaction.workspace_id == workspace_id,
     ]
     allocation_filters.extend(_allocation_scope_filters(
         account,

@@ -30,6 +30,7 @@ import {
 } from '@/components/ui/select'
 import { PageHeader } from '@/components/page-header'
 import { setThemeBasedOnSystem } from '@/lib/theme-utils'
+import { useLocalAuthEnabled } from '@/hooks/use-local-auth'
 import { Search, Plus, Trash2, Shield, ShieldOff, UserCog, Users, Scale, Tag, Palette, Save, Hash, CalendarDays } from 'lucide-react'
 import type { AdminUser } from '@/types'
 
@@ -65,6 +66,7 @@ export default function AdminSettingsPage() {
     queryKey: ['admin', 'users', search],
     queryFn: () => adminApi.listUsers({ search: search || undefined }),
   })
+  const localAuthEnabled = useLocalAuthEnabled()
 
   const createMutation = useMutation({
     mutationFn: (data: { email: string; password: string; is_superuser: boolean; preferences: Record<string, unknown> }) =>
@@ -282,10 +284,12 @@ export default function AdminSettingsPage() {
         section={t('nav.groupAdmin')}
         title={t('admin.settings.title')}
         action={
-          <Button onClick={() => { resetCreateForm(); setCreateOpen(true) }}>
-            <Plus size={16} className="mr-1.5" />
-            {t('admin.users.add')}
-          </Button>
+          localAuthEnabled ? (
+            <Button onClick={() => { resetCreateForm(); setCreateOpen(true) }}>
+              <Plus size={16} className="mr-1.5" />
+              {t('admin.users.add')}
+            </Button>
+          ) : undefined
         }
       />
 
@@ -353,6 +357,7 @@ export default function AdminSettingsPage() {
                       role="button"
                       onClick={(e) => { e.stopPropagation(); setDeleteUser(u) }}
                       className="p-1.5 rounded-md text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors"
+                      title={t('common.delete')}
                     >
                       <Trash2 size={14} />
                     </span>
@@ -477,6 +482,7 @@ export default function AdminSettingsPage() {
             <p className="text-xs text-muted-foreground mt-0.5">{t('admin.settings.providerCategoriesDesc')}</p>
           </div>
           <button
+            aria-label={t('admin.settings.providerCategories')}
             onClick={() => updateProviderCatsMutation.mutate(useProviderCats ? 'false' : 'true')}
             disabled={updateProviderCatsMutation.isPending}
             className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${useProviderCats ? 'bg-primary' : 'bg-muted-foreground/20'}`}
@@ -605,6 +611,7 @@ export default function AdminSettingsPage() {
               <p className="text-xs text-muted-foreground mt-0.5">{t('admin.settings.registrationDesc')}</p>
             </div>
             <button
+              aria-label={t('admin.settings.registration')}
               onClick={() => updateSettingMutation.mutate(isEnabled ? 'false' : 'true')}
               disabled={updateSettingMutation.isPending}
               className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${isEnabled ? 'bg-primary' : 'bg-muted-foreground/20'}`}
@@ -648,16 +655,18 @@ export default function AdminSettingsPage() {
                   <select
                     value={formLanguage}
                     onChange={(e) => setFormLanguage(e.target.value)}
-                    className="w-full h-10 rounded-lg border border-input bg-background px-3 text-sm"
+                    className="w-full h-10 rounded-lg border border-input bg-card px-3 text-sm"
                   >
                     <option value="en">English</option>
                     <option value="de">Deutsch</option>
                     <option value="ru">Русский</option>
                     <option value="uk">Українська</option>
                     <option value="pt-BR">Português (BR)</option>
+                    <option value="pt-PT">Português (PT)</option>
                     <option value="es">Español</option>
                     <option value="pl">Polski</option>
                     <option value="it">Italiano</option>
+                    <option value="fr">Français</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">
@@ -736,7 +745,7 @@ export default function AdminSettingsPage() {
                   <Label className="text-[13px]">{t('admin.users.email')}</Label>
                   <Input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required autoComplete="off" className="h-10 rounded-lg" />
                 </div>
-                {showPasswordField ? (
+                {localAuthEnabled && (showPasswordField ? (
                   <div className="space-y-1.5">
                     <Label className="text-[13px]">{t('admin.users.resetPassword')}</Label>
                     <Input
@@ -760,7 +769,7 @@ export default function AdminSettingsPage() {
                   >
                     {t('admin.users.resetPassword')}
                   </Button>
-                )}
+                ))}
 
                 <div className="flex items-center gap-2">
                   <button

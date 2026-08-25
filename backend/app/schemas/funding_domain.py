@@ -28,6 +28,7 @@ class FundingDomainUpdate(BaseModel):
 class FundingDomainRead(FundingDomainBase):
     id: uuid.UUID
     user_id: uuid.UUID
+    workspace_id: uuid.UUID
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

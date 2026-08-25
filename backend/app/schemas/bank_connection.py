@@ -37,6 +37,8 @@ class OAuthCallbackRequest(BaseModel):
     code: str
     state: Optional[str] = None
     provider: Optional[str] = None
+    sync_assets: Optional[bool] = None
+    reconnect_connection_id: Optional[uuid.UUID] = None
 
 
 class ReauthUrlResponse(BaseModel):
@@ -75,3 +77,4 @@ class ConnectionSettingsUpdate(BaseModel):
     display_name: Optional[str] = None
     payee_source: Optional[Literal["auto", "merchant", "payment_data", "description", "none"]] = None
     import_pending: Optional[bool] = None
+    sync_assets: Optional[bool] = None
