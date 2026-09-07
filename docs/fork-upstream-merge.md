@@ -1,204 +1,84 @@
-# Fork: merging upstream and running Docker
+# Fork-update runbook
 
-This guide is for maintaining a long-lived feature branch (for example `feat/funding-domains`) that regularly merges [`securo-finance/securo`](https://github.com/securo-finance/securo) `main` while keeping fork-only migrations and features.
+Use this guide for upstream updates and failures after an update. Keep `origin`
+as our separate fork and upstream pushes disabled. Derive versions, service
+names, and commands from the active deployment, Compose files, and CI workflow.
 
-## Remotes (recommended)
+## 1. Inspect and back up first
 
-```bash
-git remote add upstream https://github.com/securo-finance/securo.git
-git remote set-url --push upstream no_push   # optional: block accidental push
-git fetch upstream main
-```
+Identify the active branch, local/unpushed work, upstream baseline, running
+images, database revision, and actual storage mounts. Preserve configuration
+and untracked files; keep secrets out of tool output.
 
-- **`origin`** — your fork (`git@github.com:<you>/securo.git`)
-- **`upstream`** — read-only source of truth for `main`
+Before changing code or schema, back up PostgreSQL and roles, persistent files,
+secrets/configuration, Git history, and any queue/scheduler state needed for
+recovery. Pause writers when needed for database/file consistency. Keep backups
+private and git-ignored, verify checksums, and restore-test in a separate database.
+Retain the backup location and matching rollback commit/image references.
 
-## Merge upstream into your branch
+## 2. Merge in isolation
 
-```bash
-git checkout feat/your-branch
-git fetch upstream main
-git merge upstream/main
-```
+Fetch and pin the intended upstream release or branch. Merge into a separate
+checkout of the fork: the live dev stack bind-mounts source and reloads edits.
+Isolate test containers, databases, volumes, ports, and credentials too; a new
+directory alone does not isolate Compose.
 
-Resolve conflicts, then verify locally (see below) before pushing to `origin`.
+Preserve both upstream intent and fork behavior. Inspect automatic merges as
+well as conflicts, particularly schemas, payload builders, generation, rules,
+and sync/import. Build our fork's images; upstream images omit our changes.
 
-Typical conflict areas after a large upstream pull:
+## 3. Rehearse migrations
 
-- `backend/app/api/transactions.py`, `transaction_service.py`, schemas
-- `frontend/src/pages/account-detail.tsx`, `rules.tsx`, `transaction-dialog.tsx`
-- `backend/tests/conftest.py` (pgvector SQLite shim vs fork model imports)
+Compare the installed schema with the merged graph. Old fork versions reused
+numeric IDs later claimed by upstream, so a revision label alone is insufficient.
+Never apply a copied `alembic stamp` command without proving the schema matches.
+Legacy compatibility lives in `backend/app/core/fork_migrations.py` and
+`backend/alembic/env.py`.
 
-Keep **both** upstream behaviour and fork features (for example funding domains + upstream ignore transactions / agents).
+Use distinct `fNNN` IDs for fork migrations; preserve applied IDs and their
+position instead of repeatedly moving/replaying funding backfills. Connect new
+migrations deliberately. Run `python backend/scripts/check_migration_chain.py`;
+the repository currently requires one chain and head.
 
-## Docker after an upstream merge
+Test both a restored backup and an empty database. Verify inspection stays
+read-only, failures are recoverable, and original rows, relationships, amounts,
+ownership, and file references survive. For intended data transformations,
+verify lossless mappings; row counts alone are insufficient.
 
-Upstream often adds Python and npm dependencies. Bind mounts sync **code**, not **installed packages** inside the image or cached `node_modules` volumes.
+## 4. Validate behavior
 
-### 1. Rebuild images
+Install locked dependencies with the supported runtimes. Run the lint, type,
+test, and build checks in the current CI workflow/package scripts. Run Python
+checks from `backend/` to use its environment.
 
-```bash
-docker compose build backend frontend
-```
+Check funding domains through the real form payload and persisted API result:
+ordinary creation, every installment, recurring generation and matching,
+sync/import, rules/previews, statement allocations, and workspace isolation.
+Preserve manual choices and add regression tests for any newly bypassed path.
 
-Required when `backend/pyproject.toml` gains packages (for example `pgvector`, `fastembed` for agents) or `frontend/package.json` gains deps (for example `react-markdown`, `remark-gfm`).
+## 5. Deploy and verify
 
-**Symptom if skipped (backend):**
+Prepare the tested images and rollback references. Stop all writers, including
+workers/schedulers; take and verify a fresh backup and recheck data-sensitive
+migration assumptions. Advance the live fork to the tested merge while retaining
+local configuration/work. Apply the rehearsed migration and verify data before
+resuming writers.
 
-```
-ModuleNotFoundError: No module named 'pgvector'
-```
+Recreate all consumers of changed backend dependencies, including enabled
+optional services. Refresh only the frontend dependency volume as needed;
+retain database and uploaded-file volumes. Verify actual mounts/images, startup
+logs, frontend-proxied API health, authenticated workspaces, and affected flows.
+On failure, stop writers and recover with matching data, code, and images;
+rolling back only an image cannot undo schema changes.
 
-during `alembic upgrade head` on container start.
+## 6. Finish and maintain
 
-**Symptom if skipped (frontend):**
+Commit the merge/fixes; push only to our fork when within scope and authenticated.
+Report unpushed work. Remove temporary test services and sensitive scratch data,
+keeping verified backups and rollback references. Never restore-test on the live
+database or remove its volumes.
 
-```
-react-markdown / remark-gfm … Are they installed?
-```
-
-### 2. Refresh the frontend `node_modules` volume
-
-Compose mounts `./frontend` over `/app` but keeps dependencies in an anonymous volume at `/app/node_modules`. That volume can stay stale across merges.
-
-```bash
-docker compose up --build --renew-anon-volumes
-```
-
-Or recreate only the frontend service:
-
-```bash
-docker compose up -d --force-recreate --renew-anon-volumes frontend
-```
-
-### 3. Start the stack
-
-```bash
-docker compose up
-```
-
-Backend runs `alembic upgrade head` before uvicorn. Confirm in logs:
-
-```
-INFO:     Application startup complete.
-```
-
-## Database migrations on a fork
-
-Upstream and a fork must not use the **same Alembic revision numbers** for different changes. After merging upstream, fork-only migrations should chain **after** upstream’s current head. Revision numbers collide easily:
-
-| Upstream merge | Upstream took | Fork funding migrations moved to |
-|----------------|---------------|----------------------------------|
-| Workspaces     | `052`–`054`   | `055`–`058`                      |
-| 0.13.x         | `055`–`061`   | `062`–`065`                      |
-| 0.13.7         | `062`–`063`   | `066`–`069`                      |
-| Latest upstream | `064`–`074`  | `075`–`078`, then `079`          |
-
-Check the graph:
-
-```bash
-cd backend && uv run alembic heads    # should show a single head
-```
-
-### Fresh database
-
-Normal startup is enough:
-
-```bash
-docker compose up --build
-```
-
-### Existing DB at the old fork head (`069`)
-
-The old fork used `066`–`069` for funding features. The merged graph now uses
-those IDs for upstream changes, so an old database whose `alembic_version` says
-`069` must not upgrade from that marker: Alembic would skip upstream `064`–`069`.
-
-After making and verifying a fresh database backup, stop writers and run this
-once against that database:
-
-```bash
-docker compose run --rm backend sh -c "alembic stamp 063 && alembic upgrade head"
-```
-
-`stamp 063` changes only Alembic metadata. The subsequent upgrade applies
-upstream `064`–`074`, then the idempotent fork migrations `075`–`078`, and the
-lossless workspace-scope migration `079`. The migration preserves each domain
-UUID where possible and clones/repoints it only when the old user-scoped domain
-was shared by multiple workspaces.
-
-Verify the result:
-
-```bash
-docker compose run --rm backend alembic current
-docker compose exec db psql -U postgres -d securo \
-  -c "SELECT COUNT(*) FROM transactions;" \
-  -c "SELECT COUNT(*) FROM recurring_transactions;" \
-  -c "SELECT COUNT(*) FROM credit_card_payment_allocations;" \
-  -c "SELECT COUNT(*) FROM funding_domains WHERE workspace_id IS NULL;"
-```
-
-The last query must return `0`. Do not use this recovery path on a database
-that never ran the old fork funding migrations; use `alembic upgrade head`
-directly for a normal or fresh database.
-
-### `alembic_version` at `058` but `workspaces` table missing (empty app after login)
-
-Symptoms:
-
-- Login succeeds but dashboards/accounts look empty.
-- Postgres logs: `relation "workspaces" does not exist`.
-- `alembic_version` is already `058`, yet `\dt workspaces` returns nothing.
-
-Cause: fork funding migrations used revision numbers `052`–`055` before upstream’s workspace migrations claimed `052`–`054`. Alembic thought the DB was at head while workspace migrations were never applied.
-
-Your data is usually still there — check:
-
-```bash
-docker compose exec db psql -U postgres -d securo \
-  -c "SELECT COUNT(*) FROM transactions;" \
-  -c "SELECT COUNT(*) FROM accounts;"
-```
-
-**Recovery** (run once):
-
-```bash
-docker compose run --rm backend sh -c "alembic stamp 051 && alembic upgrade head"
-docker compose restart backend
-```
-
-This runs upstream `052`–`054` (creates workspaces, backfills `workspace_id` on all rows), then the later upstream and fork chain. Afterward verify:
-
-```bash
-docker compose exec db psql -U postgres -d securo \
-  -c "SELECT version_num FROM alembic_version;" \
-  -c "SELECT COUNT(*) FROM workspaces;" \
-  -c "SELECT COUNT(*) FROM transactions WHERE workspace_id IS NOT NULL;"
-```
-
-Refresh the browser (or log out and back in).
-
-### New fork-only migrations
-
-When adding migrations after another upstream merge:
-
-1. `git fetch upstream main && git merge upstream/main`
-2. Find upstream head: `uv run alembic heads` (on merged tree)
-3. Create the next revision with `down_revision` = that head (do not reuse upstream revision numbers)
-4. Rebuild Docker images and renew frontend anonymous volumes if dependencies changed
-
-## Quick checklist after each upstream merge
-
-| Step | Command |
-|------|---------|
-| Merge | `git merge upstream/main` |
-| Backend lint | `cd backend && uv run ruff check app tests` |
-| Tests | `cd backend && uv run pytest` (or `docker compose exec backend pytest`) |
-| Frontend build | `cd frontend && npm install && npm run build` |
-| Rebuild Docker | `docker compose build backend frontend` |
-| DB (collision case only) | `docker compose run --rm backend sh -c "alembic stamp 045 && alembic upgrade head"` |
-| Run | `docker compose up --renew-anon-volumes` |
-
-## Optional: agents profile
-
-Agents need extra compose profile and env (see root [README](../README.md#ai-agents-optional)). Migrations for agent tables are in the main chain (`046`–`049` upstream); they run even when `AGENTS_ENABLED=false`, but the feature stays off at runtime unless configured.
+After each update, revise this guide if upstream changes deployment, storage,
+dependencies, migrations, or required checks. Keep it general: discover current
+versions/IDs and keep one-time compatibility details in code or targeted docs,
+rather than accumulating past-run instructions here.

@@ -1,30 +1,10 @@
-# Database backups
+# Local backups
 
-Local PostgreSQL dumps for the Securo dev stack. **Not committed to git** (see `.gitignore`).
+Keep PostgreSQL dumps and complete backup directories here, private and excluded
+from Git. Complete backups should include their checksums and the corresponding
+code/configuration and persistent files needed for recovery. Older `.sql.gz`
+dumps are retained alongside newer custom-format dumps.
 
-## Create a backup
-
-```bash
-docker compose exec -T db pg_dump -U postgres -d securo --no-owner --no-acl \
-  | gzip > backups/securo-$(date +%Y%m%d-%H%M%S).sql.gz
-```
-
-## Restore (destructive — overwrites current DB)
-
-```bash
-# Stop backend so nothing writes during restore
-docker compose stop backend celery-worker celery-beat
-
-gunzip -c backups/securo-YYYYMMDD-HHMMSS.sql.gz \
-  | docker compose exec -T db psql -U postgres -d securo
-
-docker compose start backend celery-worker celery-beat
-```
-
-To restore into a completely empty database, drop and recreate first:
-
-```bash
-docker compose exec db psql -U postgres -c "DROP DATABASE securo;"
-docker compose exec db psql -U postgres -c "CREATE DATABASE securo;"
-# then run the gunzip | psql restore above
-```
+Follow the [fork-update runbook](../docs/fork-upstream-merge.md) for backup,
+restore-test, deployment, and recovery steps. Restore tests use a separate
+database; these local copies are not an off-host disaster-recovery backup.

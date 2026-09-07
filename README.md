@@ -236,7 +236,7 @@ pytest
 docker compose up --build
 ```
 
-**Forking and merging upstream?** See [docs/fork-upstream-merge.md](docs/fork-upstream-merge.md) for remotes, conflict patterns, Docker rebuilds (`pgvector`, frontend `node_modules` volume), and Alembic recovery when revision numbers overlapped.
+**Updating this fork?** Follow the [fork-update runbook](docs/fork-upstream-merge.md) for backups, isolated merges, migration rehearsal, funding-domain checks, deployment, and recovery. Update the guide whenever upstream changes that process.
 
 If you've [mise](https://mise.jdx.dev/) installed, you can install backend/frontend directly with it:
 
