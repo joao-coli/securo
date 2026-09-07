@@ -1,7 +1,7 @@
 """payment allocation statement due date
 
-Revision ID: 078
-Revises: 077
+Revision ID: f004
+Revises: f003
 Create Date: 2026-05-09
 """
 
@@ -10,8 +10,8 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "078"
-down_revision: Union[str, None] = "077"
+revision: str = "f004"
+down_revision: Union[str, None] = "f003"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

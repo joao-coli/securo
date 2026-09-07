@@ -10,6 +10,7 @@ import type { Transaction, TransactionEditPayload } from '../types'
 const base: InstallmentSeriesFormInput = {
   accountId: 'acct-1',
   categoryId: 'cat-1',
+  fundingDomainId: null,
   payeeId: null,
   description: 'Notebook',
   amount: '150.00',
@@ -25,6 +26,11 @@ const base: InstallmentSeriesFormInput = {
 }
 
 describe('buildInstallmentSeriesInput', () => {
+  it('keeps the domain selected in the transaction form', () => {
+    const selected = { ...base, fundingDomainId: 'domain-1' }
+    expect(buildInstallmentSeriesInput(selected).base.funding_domain_id).toBe('domain-1')
+  })
+
   it('builds the base payload with per-parcel amount', () => {
     const payload = buildInstallmentSeriesInput(base)
     expect(payload.base).toMatchObject({
@@ -66,6 +72,12 @@ describe('buildInstallmentSeriesInput', () => {
     expect(buildInstallmentSeriesInput({ ...base, installmentFrequency: 'quarterly' }).frequency).toBe('quarterly')
     expect(buildInstallmentSeriesInput({ ...base, installmentFrequency: 'weekly' }).frequency).toBe('weekly')
     expect(buildInstallmentSeriesInput({ ...base, installmentFrequency: 'yearly' }).frequency).toBe('yearly')
+    expect(buildInstallmentSeriesInput({ ...base, installmentFrequency: 'biweekly' }).frequency).toBe(
+      'biweekly',
+    )
+    expect(
+      buildInstallmentSeriesInput({ ...base, installmentFrequency: 'semiannual' }).frequency,
+    ).toBe('semiannual')
   })
 
   it('omits currency when not set', () => {

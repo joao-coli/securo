@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.payee import Payee
+from app.models.funding_domain import FundingDomain
 from app.models.recurring_transaction import RecurringTransaction
 from app.models.transaction import Transaction
 from app.schemas.recurring_transaction import RecurringTransactionCreate
@@ -53,8 +54,13 @@ async def _real_txs(session, account_id):
 @pytest.mark.asyncio
 async def test_import_links_and_advances_bill(session, test_user, test_workspace, test_account):
     account_id = test_account.id
+    domain = FundingDomain(user_id=test_user.id, workspace_id=test_workspace.id, name="Subscriptions")
+    session.add(domain)
+    await session.flush()
+    domain_id = domain.id
     bill = await _make_bill(session, test_workspace, test_user, test_account,
                             amount=Decimal("39.90"), start_date=date(2026, 1, 10))
+    bill.funding_domain_id = domain_id
     bill_id = bill.id
     txns = [TransactionImport(description="NETFLIX SUBSCRIPTION", amount=Decimal("39.90"),
                               date=date(2026, 1, 12), type="debit", currency="BRL")]
@@ -65,6 +71,7 @@ async def test_import_links_and_advances_bill(session, test_user, test_workspace
     txs = await _real_txs(session, account_id)
     assert len(txs) == 1
     assert txs[0].recurring_transaction_id == bill_id
+    assert txs[0].funding_domain_id == domain_id
     refreshed = await session.get(RecurringTransaction, bill_id)
     assert refreshed.next_occurrence == date(2026, 2, 10)
 

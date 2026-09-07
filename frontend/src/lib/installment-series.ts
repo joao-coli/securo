@@ -12,6 +12,7 @@ import type {
  */
 export interface InstallmentSeriesFormInput {
   accountId: string
+  fundingDomainId: string | null
   categoryId: string | null
   payeeId: string | null
   description: string
@@ -23,7 +24,7 @@ export interface InstallmentSeriesFormInput {
   fxFields: Pick<Partial<Transaction>, 'amount_primary' | 'fx_rate_used'>
   splits: TransactionSplitsInput | null
   installmentCount: string
-  installmentFrequency: 'monthly' | 'quarterly' | 'weekly' | 'yearly'
+  installmentFrequency: 'monthly' | 'quarterly' | 'semiannual' | 'weekly' | 'biweekly' | 'yearly'
   status: 'posted' | 'pending'
 }
 
@@ -76,6 +77,7 @@ export function buildInstallmentSeriesInput(
     base: {
       account_id: input.accountId,
       category_id: input.categoryId || null,
+      funding_domain_id: input.fundingDomainId || null,
       payee_id: input.payeeId || null,
       description: input.description,
       amount: parseFloat(input.amount),

@@ -27,7 +27,7 @@ import type { ModuleId } from './modules'
  * checkable rather than aspirational.
  */
 export type NavItem =
-  | { type: 'link'; key: string; path: string; icon: React.ElementType; module?: ModuleId }
+  | { type: 'link'; key: string; path: string; icon: React.ElementType; module: ModuleId }
   | { type: 'separator'; labelKey: string }
 
 export const navItems: NavItem[] = [
@@ -48,7 +48,7 @@ export const navItems: NavItem[] = [
   { type: 'link', key: 'goals', path: '/goals', icon: Target, module: 'goals' },
   { type: 'link', key: 'recurring', path: '/recurring', icon: Repeat, module: 'recurring' },
   { type: 'link', key: 'categories', path: '/categories', icon: Tag, module: 'categories' },
-  { type: 'link', key: 'fundingDomains', path: '/funding-domains', icon: Wallet },
+  { type: 'link', key: 'fundingDomains', path: '/funding-domains', icon: Wallet, module: 'accounts' },
   { type: 'link', key: 'payees', path: '/payees', icon: Users, module: 'payees' },
   { type: 'link', key: 'splitGroups', path: '/groups', icon: Split, module: 'split_groups' },
   { type: 'link', key: 'rules', path: '/rules', icon: SlidersHorizontal, module: 'rules' },
@@ -64,7 +64,7 @@ export function visibleNavItems(
   hasModule: (id: ModuleId) => boolean,
 ): NavItem[] {
   const kept = items.filter(
-    (item) => item.type !== 'link' || item.module === undefined || hasModule(item.module),
+    (item) => item.type !== 'link' || hasModule(item.module),
   )
   return kept.filter((item, index) => {
     if (item.type !== 'separator') return true

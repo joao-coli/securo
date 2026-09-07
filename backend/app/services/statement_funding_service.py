@@ -438,7 +438,7 @@ async def get_statement_funding_report(
     account = await _get_credit_card_account(session, credit_card_account_id, workspace_id)
     if bill_id is not None:
         bill = await _validate_bill(session, workspace_id, credit_card_account_id, bill_id)
-        if date_from is None or date_to is None:
+        if bill is not None and (date_from is None or date_to is None):
             date_from, date_to = _cycle_window_for_bill(account, bill)
     if date_from is None or date_to is None:
         raise ValueError("date_from/date_to are required when bill_id is not provided")

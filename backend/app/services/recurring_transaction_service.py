@@ -163,19 +163,23 @@ def _advance_date(
 ) -> date:
     """Advance a date by the given frequency.
 
-    For monthly, quarterly, and yearly recurrences, ``intended_day`` is the day
+    For monthly, quarterly, semiannual, and yearly recurrences, ``intended_day`` is the day
     the user actually wants (e.g. 31). We cap it to the target month's length
     so short months clamp, but subsequent occurrences recover to the intended
     day when it exists again. Falls back to ``current.day`` when not provided.
     """
     if frequency == "weekly":
         return current + timedelta(weeks=1)
+    if frequency == "biweekly":
+        return current + timedelta(weeks=2)
 
     target_day = intended_day if intended_day else current.day
     if frequency == "monthly":
         return _advance_months(current, 1, target_day)
     if frequency == "quarterly":
         return _advance_months(current, 3, target_day)
+    if frequency == "semiannual":
+        return _advance_months(current, 6, target_day)
     if frequency == "yearly":
         year = current.year + 1
         day = min(target_day, calendar.monthrange(year, current.month)[1])
@@ -292,6 +296,8 @@ async def generate_pending(
             )
             if existing_real is not None:
                 existing_real.recurring_transaction_id = recurring.id
+                if existing_real.funding_domain_id is None:
+                    existing_real.funding_domain_id = recurring.funding_domain_id
             else:
                 account = await session.get(Account, recurring.account_id)
                 # Only occurrences that already came due reach this point, so
@@ -314,6 +320,7 @@ async def generate_pending(
                 is_synced_account = account is not None and account.connection_id is not None
                 transaction = Transaction(
                     user_id=user_id,
+                    workspace_id=recurring.workspace_id,
                     account_id=recurring.account_id,
                     category_id=recurring.category_id,
                     funding_domain_id=recurring.funding_domain_id,

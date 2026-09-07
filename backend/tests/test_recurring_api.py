@@ -104,6 +104,45 @@ async def test_create_recurring_skip_first_quarterly(client, auth_headers, test_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("frequency", "start_date", "day_of_month", "expected_next"),
+    [
+        ("biweekly", "2026-01-05", None, "2026-01-19"),
+        ("semiannual", "2026-01-31", 31, "2026-07-31"),
+    ],
+    ids=["biweekly", "semiannual"],
+)
+async def test_create_recurring_skip_first_new_frequencies(
+    client,
+    auth_headers,
+    test_account,
+    frequency,
+    start_date,
+    day_of_month,
+    expected_next,
+):
+    response = await client.post(
+        "/api/recurring-transactions",
+        json={
+            "description": f"{frequency} regression",
+            "amount": 100.00,
+            "currency": "BRL",
+            "type": "debit",
+            "frequency": frequency,
+            "day_of_month": day_of_month,
+            "start_date": start_date,
+            "skip_first": True,
+            "account_id": str(test_account.id),
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201
+    data = response.json()
+    assert data["frequency"] == frequency
+    assert data["next_occurrence"] == expected_next
+
+
+@pytest.mark.asyncio
 async def test_generate_pending_creates_transactions(client, auth_headers, test_account):
     """Generate pending creates transactions and advances next_occurrence."""
     # Create a recurring that's already past due
@@ -497,3 +536,38 @@ async def test_weekend_adjustment_update_rejects_null_but_allows_omission(
         row for row in list_response.json() if row["id"] == recurring_id
     )
     assert listed["weekend_adjustment"] == "previous_friday"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("already_assigned", [False, True])
+async def test_recurring_match_inherits_domain_without_replacing_manual_choice(
+    client, auth_headers, test_account, already_assigned,
+):
+    today = date.today().isoformat()
+    domain = (await client.post(
+        "/api/funding-domains", json={"name": "Subscription funding"}, headers=auth_headers,
+    )).json()
+    manual_domain = (await client.post(
+        "/api/funding-domains", json={"name": "Manual choice"}, headers=auth_headers,
+    )).json()
+    transaction = (await client.post(
+        "/api/transactions", headers=auth_headers, json={
+            "account_id": str(test_account.id), "description": "Subscription funding test",
+            "amount": "33.00", "date": today, "type": "debit", "currency": "BRL",
+            "funding_domain_id": manual_domain["id"] if already_assigned else None,
+        },
+    )).json()
+    recurring = await client.post(
+        "/api/recurring-transactions", headers=auth_headers, json={
+            "account_id": str(test_account.id), "description": "Subscription funding test",
+            "amount": "33.00", "start_date": today, "type": "debit", "currency": "BRL",
+            "frequency": "monthly", "funding_domain_id": domain["id"],
+        },
+    )
+    assert recurring.status_code == 201, recurring.text
+    generated = await client.post("/api/recurring-transactions/generate", headers=auth_headers)
+    assert generated.status_code == 200, generated.text
+    assert generated.json()["generated"] == 0
+    saved = await client.get(f"/api/transactions/{transaction['id']}", headers=auth_headers)
+    assert saved.json()["recurring_transaction_id"] == recurring.json()["id"]
+    assert saved.json()["funding_domain_id"] == (manual_domain if already_assigned else domain)["id"]

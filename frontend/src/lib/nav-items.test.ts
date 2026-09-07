@@ -40,12 +40,12 @@ describe('nav catalog', () => {
 
   it('has a link for every module in the catalog', () => {
     const covered = navItems.filter((i) => i.type === 'link').map((i) => i.module)
-    expect([...covered].sort()).toEqual([...MODULE_IDS].sort())
+    expect([...new Set(covered)].sort()).toEqual([...MODULE_IDS].sort())
   })
 
-  it('gives every link a distinct module', () => {
-    const covered = navItems.filter((i) => i.type === 'link').map((i) => i.module)
-    expect(new Set(covered).size).toBe(covered.length)
+  it('keeps funding domains with the accounts module', () => {
+    expect(linkKeys(visibleNavItems(navItems, all))).toContain('fundingDomains')
+    expect(linkKeys(visibleNavItems(navItems, allExcept('accounts')))).not.toContain('fundingDomains')
   })
 })
 
@@ -62,6 +62,7 @@ describe('visibleNavItems', () => {
       'goals',
       'recurring',
       'categories',
+      'fundingDomains',
       'payees',
       'splitGroups',
       'rules',

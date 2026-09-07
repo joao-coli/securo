@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account import Account
 from app.models.bank_connection import BankConnection
 from app.models.payee import Payee
+from app.models.funding_domain import FundingDomain
 from app.models.recurring_transaction import RecurringTransaction
 from app.models.transaction import Transaction
 from app.schemas.recurring_transaction import RecurringTransactionCreate
@@ -150,8 +151,13 @@ async def _all_txs(session, account_id):
 async def test_sync_links_and_advances_bill(session, test_user, test_workspace, conn_account):
     conn, account = conn_account
     conn_id, account_id = conn.id, account.id
+    domain = FundingDomain(user_id=test_user.id, workspace_id=test_workspace.id, name="Subscriptions")
+    session.add(domain)
+    await session.flush()
+    domain_id = domain.id
     bill = await _make_bill(session, test_workspace, test_user, account,
                             start_date=date(2025, 1, 10))
+    bill.funding_domain_id = domain_id
     bill_id = bill.id
     provider = _provider([_tx(external_id="s1", description="NETFLIX SUBSCRIPTION",
                               amount=Decimal("39.90"), date=date(2025, 1, 12))])
@@ -161,6 +167,7 @@ async def test_sync_links_and_advances_bill(session, test_user, test_workspace, 
     txs = await _all_txs(session, account_id)
     assert len(txs) == 1
     assert txs[0].recurring_transaction_id == bill_id
+    assert txs[0].funding_domain_id == domain_id
     assert txs[0].source == "sync"
     refreshed = await session.get(RecurringTransaction, bill_id)
     assert refreshed.next_occurrence == date(2025, 2, 10)  # advanced past fulfilled occ

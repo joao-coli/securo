@@ -6,9 +6,11 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
+from alembic.command import upgrade as upgrade_command
 
 from app.core.config import get_settings
 from app.core.database import Base
+from app.core.fork_migrations import normalize_legacy_funding_revision
 from app.models import *  # noqa: F401,F403
 # Agents module models (always loaded so migrations stay in sync; the
 # feature itself is gated at runtime by AGENTS_ENABLED).
@@ -42,6 +44,11 @@ def do_run_migrations(connection: Connection) -> None:
     context.configure(connection=connection, target_metadata=target_metadata)
 
     with context.begin_transaction():
+        # Metadata inspection commands (current, history, check) stay read-only.
+        # Programmatic upgrades can opt in through Config.attributes.
+        cli_command = getattr(config.cmd_opts, "cmd", (None,))[0]
+        if cli_command is upgrade_command or config.attributes.get("normalize_legacy_funding"):
+            normalize_legacy_funding_revision(connection)
         context.run_migrations()
 
 

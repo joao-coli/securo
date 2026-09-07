@@ -720,7 +720,7 @@ async def create_transaction(
         await split_service.replace_splits(session, transaction, data.splits, user_id)
 
     await session.commit()
-    await session.refresh(transaction, ["category", "splits"])
+    await session.refresh(transaction, ["category", "splits", "funding_domain"])
     return transaction
 
 
@@ -734,7 +734,7 @@ async def create_installment_series(
 
     Repeats ``data.base`` ``data.installments`` times: every parcel stores
     the base amount, date advanced by the given frequency (monthly/quarterly/
-    weekly/yearly, matching recurring transactions), and the shared
+    semiannual/weekly/biweekly/yearly, matching recurring transactions), and the shared
     installment fingerprint (account, installment_purchase_date,
     total_installments, installment_total_amount = amount * installments)
     plus its 1-based installment_number, so the existing sync dedup matches
@@ -761,6 +761,8 @@ async def create_installment_series(
     if not account:
         raise ValueError("Account not found")
 
+    if base.funding_domain_id is not None:
+        await get_assignable_funding_domain(session, base.funding_domain_id, workspace_id)
     await _ensure_category_in_workspace(session, workspace_id, base.category_id)
     await _ensure_payee_in_workspace(session, workspace_id, base.payee_id)
 
@@ -783,6 +785,7 @@ async def create_installment_series(
             workspace_id=workspace_id,
             account_id=base.account_id,
             category_id=base.category_id,
+            funding_domain_id=base.funding_domain_id,
             payee_id=base.payee_id,
             description=base.description,
             amount=base.amount,
@@ -809,7 +812,7 @@ async def create_installment_series(
     # Rules, FX stamping and splits run after every row has an ID so each
     # parcel is finalized exactly like a single manual transaction.
     for tx in created:
-        if not base.category_id:
+        if not base.category_id or not base.funding_domain_id:
             await apply_rules_to_transaction(session, user_id, tx)
         if base.fx_rate_used is not None:
             _apply_fx_override(tx, tx.amount, None, base.fx_rate_used)
@@ -822,7 +825,7 @@ async def create_installment_series(
 
     await session.commit()
     for tx in created:
-        await session.refresh(tx, ["category", "splits"])
+        await session.refresh(tx, ["category", "splits", "funding_domain"])
     return created
 
 
@@ -1627,7 +1630,7 @@ async def bulk_update_funding_domain(
         .execution_options(synchronize_session=False)
     )
     await session.commit()
-    return result.rowcount
+    return cast(CursorResult, result).rowcount
 
 
 _TAG_CHAR_CLASS = r"[\wÀ-ž-]"

@@ -1,11 +1,12 @@
 """scope funding domains to workspaces without losing existing references
 
-Revision ID: 079
-Revises: 078
+Revision ID: f005
+Revises: f004
 Create Date: 2026-08-25
 """
 
 from collections import Counter
+from collections.abc import Mapping
 import uuid
 from typing import Sequence, Union
 
@@ -13,8 +14,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = "079"
-down_revision: Union[str, None] = "078"
+revision: str = "f005"
+down_revision: Union[str, None] = "f004"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -71,7 +72,7 @@ def _referenced_workspace_counts(bind, domain_id: uuid.UUID) -> Counter[uuid.UUI
     return Counter(row[0] for row in rows if row[0] is not None)
 
 
-def _copy_domain(bind, source: dict, workspace_id: uuid.UUID) -> uuid.UUID:
+def _copy_domain(bind, source: Mapping, workspace_id: uuid.UUID) -> uuid.UUID:
     new_id = uuid.uuid4()
     bind.execute(
         sa.text(

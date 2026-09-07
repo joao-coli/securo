@@ -311,3 +311,94 @@ async def test_bulk_funding_domain_only_updates_credit_card_debit_purchases(
     assert refreshed_cc_debit.json()["funding_domain_id"] == domain["id"]
     assert refreshed_cc_credit.json()["funding_domain_id"] is None
     assert refreshed_checking_debit.json()["funding_domain_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_installments_keep_selected_funding_domain_on_every_created_transaction(
+    client, auth_headers, test_account,
+):
+    domain_response = await client.post(
+        "/api/funding-domains", json={"name": "Installment domain"}, headers=auth_headers,
+    )
+    assert domain_response.status_code == 201
+    domain = domain_response.json()
+    response = await client.post(
+        "/api/transactions/installments",
+        json={
+            "base": {
+                "account_id": str(test_account.id),
+                "description": "Parcelled purchase",
+                "amount": "50.00", "date": "2026-09-07", "type": "debit",
+                "currency": "BRL", "funding_domain_id": domain["id"],
+            },
+            "installments": 3, "frequency": "monthly",
+        },
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+    assert len(response.json()) == 3
+    for transaction in response.json():
+        assert transaction["funding_domain_id"] == domain["id"]
+        saved = await client.get(f"/api/transactions/{transaction['id']}", headers=auth_headers)
+        assert saved.json()["funding_domain_id"] == domain["id"]
+
+
+@pytest.mark.asyncio
+async def test_rule_preview_counts_domain_changes_without_mutating_transactions(
+    client, auth_headers, test_account,
+):
+    domain = (await client.post(
+        "/api/funding-domains", json={"name": "Preview domain"}, headers=auth_headers,
+    )).json()
+    transaction = (await client.post(
+        "/api/transactions", headers=auth_headers, json={
+            "account_id": str(test_account.id), "description": "Preview funding choice",
+            "amount": "15.00", "date": "2026-09-07", "type": "debit",
+        },
+    )).json()
+    response = await client.post(
+        "/api/rules/preview", headers=auth_headers, json={
+            "conditions_op": "and",
+            "conditions": [{"field": "description", "op": "equals", "value": "Preview funding choice"}],
+            "actions": [{"op": "set_funding_domain", "value": domain["id"]}],
+            "apply_to_existing": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["will_change"] == 1
+    saved = await client.get(f"/api/transactions/{transaction['id']}", headers=auth_headers)
+    assert saved.json()["funding_domain_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unavailable", ["inactive", "other_workspace"])
+async def test_installments_reject_unavailable_domains_without_creating_rows(
+    client, auth_headers, test_account, session, test_user, unavailable,
+):
+    headers = auth_headers
+    if unavailable == "other_workspace":
+        from app.services.workspace_service import create_workspace
+        workspace = await create_workspace(
+            session, name="Other workspace", creator=test_user, self_membership=True,
+        )
+        headers = {**auth_headers, "X-Workspace-Id": str(workspace.id)}
+    domain = (await client.post(
+        "/api/funding-domains", headers=headers, json={"name": "Unavailable domain"},
+    )).json()
+    if unavailable == "inactive":
+        await client.patch(
+            f"/api/funding-domains/{domain['id']}", headers=headers, json={"is_active": False},
+        )
+    before = (await client.get("/api/transactions", headers=auth_headers)).json()["total"]
+    response = await client.post(
+        "/api/transactions/installments", headers=auth_headers, json={
+            "base": {
+                "account_id": str(test_account.id), "description": "Invalid installment",
+                "amount": "20.00", "date": "2026-09-07", "type": "debit",
+                "funding_domain_id": domain["id"],
+            },
+            "installments": 3,
+        },
+    )
+    assert response.status_code == 400, response.text
+    assert (await client.get("/api/transactions", headers=auth_headers)).json()["total"] == before
