@@ -22,7 +22,7 @@ from app.schemas.transaction import (
     TransferCreate,
 )
 from app.schemas.transaction_split import TransactionSplitInput, TransactionSplitsInput
-from app.services import split_service
+from app.services import reconciliation_service, split_service
 from app.services._query_filters import credit_card_bill_bucket_date, credit_card_bill_scope
 from app.services.credit_card_service import apply_effective_date
 from app.services.funding_domain_service import get_assignable_funding_domain
@@ -683,6 +683,7 @@ async def create_transaction(
         category_id=data.category_id,  # use provided category if given
         funding_domain_id=data.funding_domain_id,
         payee_id=data.payee_id,
+        external_id=data.external_id,
         description=data.description,
         amount=data.amount,
         currency=currency,
@@ -718,6 +719,13 @@ async def create_transaction(
 
     if data.splits is not None:
         await split_service.replace_splits(session, transaction, data.splits, user_id)
+
+    # A payment recorded by hand settles an invoice exactly as a synced one
+    # does. Someone who reconciles by typing the Pix in should not have to
+    # then go and link it: that is the manual work the whole feature exists
+    # to remove, and leaving this path out would remove it only for people
+    # whose bank happens to be connected.
+    await reconciliation_service.match_incoming(session, workspace_id, [transaction])
 
     await session.commit()
     await session.refresh(transaction, ["category", "splits", "funding_domain"])
