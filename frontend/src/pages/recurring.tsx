@@ -20,9 +20,10 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import type { Account, Category, CategoryGroup, FundingDomain, RecurringTransaction } from '@/types'
-import { Pencil, Trash2, Plus, RefreshCw, Info } from 'lucide-react'
+import { Pencil, Trash2, Plus, RefreshCw, Info, Minus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { PageHeader } from '@/components/page-header'
+import { CategoryIcon } from '@/components/category-icon'
 import { CategorySelect } from '@/components/category-select'
 import { DatePickerInput } from '@/components/ui/date-picker-input'
 import { usePrivacyMode } from '@/hooks/use-privacy-mode'
@@ -32,6 +33,31 @@ import { formatCurrency } from '@/lib/format'
 
 const TH = 'text-xs font-medium text-muted-foreground py-3'
 
+// Normalizes a recurring charge to its per-month equivalent so totals across
+// frequencies are comparable: a R$ 120/quarter bill counts as R$ 40/mo.
+const FREQ_PER_MONTH: Record<string, number> = {
+  weekly: 52 / 12,
+  biweekly: 26 / 12,
+  monthly: 1,
+  quarterly: 1 / 3,
+  semiannual: 1 / 6,
+  yearly: 1 / 12,
+}
+
+type FundingDomainTotal = {
+  key: string
+  domain: FundingDomain | null
+  activeCount: number
+  inactiveCount: number
+  // Sum of per-month equivalents in the user's display currency, signed by
+  // the recurring's type (debits are expenses, credits are income). The
+  // stored amount_primary is always positive, so the type supplies the sign.
+  // Foreign-currency rows without a stamped primary amount are counted but
+  // do not contribute money.
+  activeExpenseMonthly: number
+  activeIncomeMonthly: number
+}
+
 function SectionCard({ children }: { children: React.ReactNode }) {
   return (
     <div className="bg-card rounded-xl border border-border shadow-sm overflow-hidden">
@@ -40,10 +66,15 @@ function SectionCard({ children }: { children: React.ReactNode }) {
   )
 }
 
-function SectionHeader({ title, action }: { title: string; action?: React.ReactNode }) {
+function SectionHeader({ title, description, action }: { title: string; description?: string; action?: React.ReactNode }) {
   return (
     <div className="px-4 sm:px-5 py-4 border-b border-border flex flex-wrap items-center justify-between gap-2">
-      <p className="text-sm font-semibold text-foreground">{title}</p>
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-foreground">{title}</p>
+        {description && (
+          <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+        )}
+      </div>
       {action}
     </div>
   )
@@ -104,6 +135,45 @@ function RecurringTab() {
     queryFn: () => fundingDomainsApi.list(),
     enabled: Boolean(current?.id),
   })
+
+  const domainById = useMemo(
+    () => new Map((fundingDomainsList ?? []).map((domain) => [domain.id, domain])),
+    [fundingDomainsList]
+  )
+  // The funding-domain column only earns its space when the workspace
+  // actually uses domains; otherwise the table stays compact.
+  const hasFundingDomains = (fundingDomainsList?.length ?? 0) > 0
+
+  const fundingTotals = useMemo<FundingDomainTotal[]>(() => {
+    const buckets = new Map<string, FundingDomainTotal>()
+    const bucket = (key: string, domain: FundingDomain | null) => {
+      let entry = buckets.get(key)
+      if (!entry) {
+        entry = { key, domain, activeCount: 0, inactiveCount: 0, activeExpenseMonthly: 0, activeIncomeMonthly: 0 }
+        buckets.set(key, entry)
+      }
+      return entry
+    }
+    for (const domain of fundingDomainsList ?? []) bucket(domain.id, domain)
+    for (const rt of recurringList ?? []) {
+      const primary = rt.amount_primary != null
+        ? Number(rt.amount_primary)
+        : rt.currency === userCurrency ? Number(rt.amount) : null
+      const monthly = primary != null ? primary * (FREQ_PER_MONTH[rt.frequency] ?? 1) : null
+      const entry = bucket(rt.funding_domain_id ?? 'none', domainById.get(rt.funding_domain_id ?? '') ?? null)
+      if (rt.is_active) {
+        entry.activeCount += 1
+        if (monthly != null) {
+          if (rt.type === 'credit') entry.activeIncomeMonthly += monthly
+          else entry.activeExpenseMonthly += monthly
+        }
+      } else {
+        entry.inactiveCount += 1
+      }
+    }
+    // Drop unused domains (dangling ids included); show in list order, none last.
+    return [...buckets.values()].filter((b) => b.activeCount > 0 || b.inactiveCount > 0)
+  }, [recurringList, fundingDomainsList, domainById, userCurrency])
 
   const createMutation = useMutation({
     mutationFn: (data: Partial<RecurringTransaction>) => recurringApi.create(data),
@@ -166,7 +236,8 @@ function RecurringTab() {
 
   return (
     <>
-      <SectionCard>
+      <div className="space-y-4">
+        <SectionCard>
         <SectionHeader
           title={t('recurring.title')}
           action={
@@ -195,6 +266,9 @@ function RecurringTab() {
               <tr className="border-b border-border">
                 <th className={`${TH} pl-4 sm:pl-5 text-left`}>{t('recurring.description')}</th>
                 <th className={`${TH} text-left w-36`}>{t('recurring.amount')}</th>
+                {hasFundingDomains && (
+                  <th className={`${TH} text-left w-44 hidden lg:table-cell`}>{t('transactions.fundingDomain')}</th>
+                )}
                 <th className={`${TH} text-left w-28 hidden md:table-cell`}>{t('recurring.frequency')}</th>
                 <th className={`${TH} text-left w-32 hidden md:table-cell`}>{t('recurring.nextOccurrence')}</th>
                 <th className={`${TH} text-left w-24 hidden sm:table-cell`}>{t('recurring.status')}</th>
@@ -216,6 +290,25 @@ function RecurringTab() {
                       </div>
                     )}
                   </td>
+                  {hasFundingDomains && (
+                    <td className="py-3 hidden lg:table-cell">
+                      {rt.funding_domain_id && domainById.get(rt.funding_domain_id) && (
+                        <span className="inline-flex items-center gap-1.5 min-w-0 max-w-[11rem]">
+                          <CategoryIcon
+                            icon={domainById.get(rt.funding_domain_id)!.icon}
+                            color={domainById.get(rt.funding_domain_id)!.color}
+                            size="xs"
+                          />
+                          <span className={cn(
+                            'text-xs truncate',
+                            domainById.get(rt.funding_domain_id)!.is_active ? 'text-muted-foreground' : 'text-muted-foreground/60 line-through'
+                          )}>
+                            {domainById.get(rt.funding_domain_id)!.name}
+                          </span>
+                        </span>
+                      )}
+                    </td>
+                  )}
                   <td className="py-3 hidden md:table-cell">
                     <span className="text-xs bg-muted text-muted-foreground px-2 py-0.5 rounded-full font-medium">
                       {frequencyLabel(rt.frequency)}
@@ -265,6 +358,62 @@ function RecurringTab() {
           <p className="text-sm text-muted-foreground text-center py-10">{t('recurring.empty')}</p>
         )}
       </SectionCard>
+
+      {hasFundingDomains && fundingTotals.length > 0 && (
+        <SectionCard>
+          <SectionHeader
+            title={t('fundingDomains.title')}
+            description={t('recurring.fundingTotalsHint')}
+          />
+          <div className="divide-y divide-border">
+            {fundingTotals.map((tot) => {
+              const moneyOf = (value: number) =>
+                `${value < 0 ? '−' : '+'}${mask(formatCurrency(Math.abs(value), userCurrency, locale))}`
+              const showExpense = tot.activeExpenseMonthly !== 0
+              const showIncome = tot.activeIncomeMonthly !== 0
+              return (
+                <div key={tot.key} className="flex items-center gap-3 px-4 sm:px-5 py-3">
+                  {tot.domain ? (
+                    <CategoryIcon icon={tot.domain.icon} color={tot.domain.color} size="sm" />
+                  ) : (
+                    <div className="w-6 h-6 rounded-md bg-muted flex items-center justify-center shrink-0 text-muted-foreground">
+                      <Minus size={14} />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-foreground truncate">
+                      {tot.domain?.name ?? t('transactions.noFundingDomain')}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {tot.activeCount} {t('recurring.active').toLowerCase()} · {tot.inactiveCount} {t('recurring.inactive').toLowerCase()}
+                    </p>
+                  </div>
+                  <div className="text-right shrink-0 space-y-0.5">
+                    {showExpense && (
+                      <p className="text-sm font-semibold tabular-nums text-rose-500">
+                        {moneyOf(tot.activeExpenseMonthly)}
+                        <span className="text-xs font-normal text-muted-foreground">{t('recurring.perMonth')}</span>
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">{t('recurring.activeExpenses').toLowerCase()}</span>
+                      </p>
+                    )}
+                    {showIncome && (
+                      <p className="text-sm font-semibold tabular-nums text-emerald-600">
+                        {moneyOf(tot.activeIncomeMonthly)}
+                        <span className="text-xs font-normal text-muted-foreground">{t('recurring.perMonth')}</span>
+                        <span className="ml-1.5 text-xs font-normal text-muted-foreground">{t('recurring.activeIncomeLabel').toLowerCase()}</span>
+                      </p>
+                    )}
+                    {!showExpense && !showIncome && (
+                      <p className="text-sm text-muted-foreground">–</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </SectionCard>
+      )}
+      </div>
 
       <Dialog open={dialogOpen} onOpenChange={() => { setDialogOpen(false); setEditing(null) }}>
         <DialogContent>
