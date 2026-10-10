@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect, useMemo } from 'react'
-import { getAccountName } from '@/lib/account-utils'
+import { useState, useCallback, useEffect, useMemo, lazy, Suspense } from 'react'
+import { getAccountName, sortAccountsByAbsoluteBalance, sumAccountBalances } from '@/lib/account-utils'
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useDisplayLocale } from '@/hooks/use-display-locale'
@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useAuth } from '@/contexts/auth-context'
 import { useCollectionFilter } from '@/contexts/collection-filter-context'
 import { useWorkspace } from '@/contexts/workspace-context'
+import { useSidebarState } from '@/contexts/sidebar-state-context'
 import { CollectionSelector } from '@/components/collection-selector'
 import { auth as authApi, admin as adminApi } from '@/lib/api'
 import { resolveSupportedLang } from '@/lib/i18n'
@@ -59,12 +60,12 @@ import { CommandPalette } from '@/components/command-palette'
 import { useCommandPaletteHotkey } from '@/hooks/use-command-palette-hotkey'
 import { GlobalChatPanel } from '@/components/global-chat-panel'
 import { useFeatureFlags } from '@/hooks/use-feature-flags'
-import { Bot, Search, Sparkles } from 'lucide-react'
+import { Bot, Plus, Search, Sparkles } from 'lucide-react'
 import { setThemeBasedOnSystem } from '@/lib/theme-utils'
 import { useLocalAuthEnabled } from '@/hooks/use-local-auth'
 import { formatCurrency } from '@/lib/format'
 
-const SIDEBAR_COLLAPSED_STORAGE_KEY = 'securo.sidebar.collapsed'
+const QuickAddTransaction = lazy(() => import('@/components/quick-add-transaction'))
 
 /** Placeholder rows shown while the workspace's module list is in flight. */
 function NavSkeleton() {
@@ -96,9 +97,8 @@ export function AppLayout() {
   const { theme, setTheme, resolvedTheme } = useTheme()
   const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(
-    () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true',
-  )
+  const [quickAddOpen, setQuickAddOpen] = useState(false)
+  const { collapsed: desktopSidebarCollapsed, toggleCollapsed: toggleDesktopSidebar } = useSidebarState()
   const [accountsExpanded, setAccountsExpanded] = useState(true)
   const [accountsShowAll, setAccountsShowAll] = useState(false)
   const { privacyMode, togglePrivacyMode, mask } = usePrivacyMode()
@@ -183,13 +183,6 @@ export function AppLayout() {
     : typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-color-scheme: dark)').matches
   const toggleTheme = () => setTheme(isDark ? 'light' : 'dark')
-  const toggleDesktopSidebar = () => {
-    setDesktopSidebarCollapsed((collapsed) => {
-      const next = !collapsed
-      localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next))
-      return next
-    })
-  }
 
   const { data: accountsList } = useQuery({
     queryKey: ['accounts'],
@@ -202,14 +195,7 @@ export function AppLayout() {
   const visibleAccounts = activeAccountIds
     ? allAccounts.filter((a) => activeAccountIds.includes(a.id))
     : allAccounts
-  const sharedBalanceGroups = new Set<string>()
-  const totalBalance = visibleAccounts.reduce((sum, a) => {
-    if (a.shared_balance_group) {
-      if (sharedBalanceGroups.has(a.shared_balance_group)) return sum
-      sharedBalanceGroups.add(a.shared_balance_group)
-    }
-    return sum + Number(a.balance_primary ?? a.current_balance)
-  }, 0)
+  const totalBalance = sumAccountBalances(visibleAccounts)
   const versionA11yLabel = t('app.versionAriaLabel', { version: APP_VERSION })
 
   return (
@@ -219,7 +205,7 @@ export function AppLayout() {
         <button
           onClick={() => setSidebarOpen(!sidebarOpen)}
           className="text-sidebar-muted hover:text-sidebar-foreground transition-colors"
-          aria-label="Toggle menu"
+          aria-label={t('app.toggleMenu')}
         >
           <Menu size={20} />
         </button>
@@ -448,7 +434,8 @@ export function AppLayout() {
                   ? location.pathname === '/'
                   : location.pathname.startsWith(item.path)
               const Icon = item.icon
-              return (
+              const showQuickAdd = item.key === 'transactions' && canWrite
+              const link = (
                 <Link
                   key={item.key}
                   to={item.path}
@@ -474,6 +461,27 @@ export function AppLayout() {
                   />
                   <span className={cn(desktopSidebarCollapsed && 'lg:hidden')}>{t(`nav.${item.key}`)}</span>
                 </Link>
+              )
+              if (!showQuickAdd) return link
+              return (
+                <div key={item.key} className="relative flex items-center">
+                  <div className="min-w-0 flex-1">{link}</div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSidebarOpen(false)
+                      setQuickAddOpen(true)
+                    }}
+                    title={t('transactions.addManual')}
+                    aria-label={t('transactions.addManual')}
+                    className={cn(
+                      'absolute right-2 flex h-6 w-6 items-center justify-center rounded-md border border-sidebar-border bg-sidebar text-sidebar-muted transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground',
+                      desktopSidebarCollapsed && 'lg:hidden',
+                    )}
+                  >
+                    <Plus size={14} />
+                  </button>
+                </div>
               )
             })}
           </nav>
@@ -505,8 +513,9 @@ export function AppLayout() {
               </button>
               {accountsExpanded && (
                 <div className="mt-1 space-y-0.5">
-                  {[...visibleAccounts].sort((a, b) => Math.abs(Number(b.current_balance)) - Math.abs(Number(a.current_balance))).slice(0, accountsShowAll ? visibleAccounts.length : 3).map((acc) => {
-                    const balance = Number(acc.current_balance) || 0
+                  {sortAccountsByAbsoluteBalance(visibleAccounts, (a) => a.balance_primary ?? a.current_balance).slice(0, accountsShowAll ? visibleAccounts.length : 3).map((acc) => {
+                    const balance = Number(acc.balance_primary ?? acc.current_balance) || 0
+                    const balanceCurrency = acc.balance_primary != null ? userCurrency : acc.currency
                     const typeKey = acc.type.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase()).replace(/^./, c => c.toUpperCase())
 
                     return (
@@ -525,7 +534,7 @@ export function AppLayout() {
                         </div>
                         <div className="text-right shrink-0 ml-2">
                           <span className={`block tabular-nums font-medium text-xs ${balance < 0 ? 'text-rose-400' : 'text-sidebar-foreground'}`}>
-                            {mask(formatCurrency(balance, acc.currency, locale))}
+                            {mask(formatCurrency(balance, balanceCurrency, locale))}
                           </span>
                         </div>
                       </Link>
@@ -617,6 +626,11 @@ export function AppLayout() {
         localAuthEnabled={localAuthEnabled}
       />
       <BackupDialog open={backupOpen} onClose={() => setBackupOpen(false)} />
+      {quickAddOpen && (
+        <Suspense fallback={null}>
+          <QuickAddTransaction open={quickAddOpen} onClose={() => setQuickAddOpen(false)} />
+        </Suspense>
+      )}
       <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
       {/* Slide-over global chat — opened from the sidebar pill or via
           ⌘J. The previous floating bottom-right button was removed
