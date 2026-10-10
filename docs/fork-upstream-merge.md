@@ -51,6 +51,12 @@ Install locked dependencies with the supported runtimes. Run the lint, type,
 test, and build checks in the current CI workflow/package scripts. Run Python
 checks from `backend/` to use its environment.
 
+Note for rehearsal checkouts: containers build and run as root, so any
+rehearsal that starts the stack against a bind-mounted checkout can create
+root-owned files (for example under `backend/data/`) that later fail test
+suites run as the host user. Remove those artifacts (or chown them) before
+running the test suites.
+
 Check funding domains through the real form payload and persisted API result:
 ordinary creation, every installment, recurring generation and matching,
 sync/import, rules/previews, statement allocations, and workspace isolation.
