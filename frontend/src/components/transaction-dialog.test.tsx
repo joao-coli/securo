@@ -8,9 +8,10 @@ import { createTestQueryClient, renderWithProviders, t } from '@/test/utils'
 vi.mock('@/contexts/auth-context', () => ({
   useAuth: () => ({ user: { preferences: { currency_display: 'BRL' } } }),
 }))
-vi.mock('@/contexts/workspace-context', () => ({
-  useWorkspace: () => ({ current: { id: 'workspace-1' }, hasModule: () => true }),
-}))
+vi.mock('@/contexts/workspace-context', async (importOriginal) => {
+  const actual = await importOriginal()
+  return { ...actual, useWorkspace: () => ({ current: { id: 'workspace-1' }, hasModule: () => true }) }
+})
 
 function renderCreation() {
   const queryClient = createTestQueryClient()
