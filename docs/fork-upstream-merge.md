@@ -26,6 +26,10 @@ directory alone does not isolate Compose.
 Preserve both upstream intent and fork behavior. Inspect automatic merges as
 well as conflicts, particularly schemas, payload builders, generation, rules,
 and sync/import. Build our fork's images; upstream images omit our changes.
+Build through `docker compose build` so each service uses its intended
+Dockerfile — the dev frontend expects `frontend/Dockerfile.dev`, the backend
+its plain `Dockerfile`. A manual `docker build` without `-f` can pair a
+production image with a dev stack and still boot.
 
 ## 3. Rehearse migrations
 
@@ -54,8 +58,10 @@ checks from `backend/` to use its environment.
 Note for rehearsal checkouts: containers build and run as root, so any
 rehearsal that starts the stack against a bind-mounted checkout can create
 root-owned files (for example under `backend/data/`) that later fail test
-suites run as the host user. Remove those artifacts (or chown them) before
-running the test suites.
+suites run as the host user. Compose also auto-creates missing bind sources
+as root — a fresh checkout gains an empty root-owned `secrets/` on first
+`up`. Clean those artifacts before running the test suites or removing the
+checkout; a throwaway `alpine rm -rf` container handles it without sudo.
 
 Check funding domains through the real form payload and persisted API result:
 ordinary creation, every installment, recurring generation and matching,
