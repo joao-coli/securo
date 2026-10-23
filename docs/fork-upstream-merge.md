@@ -49,11 +49,23 @@ read-only, failures are recoverable, and original rows, relationships, amounts,
 ownership, and file references survive. For intended data transformations,
 verify lossless mappings; row counts alone are insufficient.
 
+Compare restored and fresh schemas too. Review column ordering, equivalent
+PostgreSQL constraint expressions, and retained legacy indexes separately from
+missing columns or constraints; a textual schema diff alone is not a verdict.
+
 ## 4. Validate behavior
 
 Install locked dependencies with the supported runtimes. Run the lint, type,
 test, and build checks in the current CI workflow/package scripts. Run Python
 checks from `backend/` to use its environment.
+
+The upstream API contract sweep has an explicit route/status baseline. Extend
+and review it for fork routes when merging changes to that sweep; regenerate
+only against its disposable test database. New upstream locales and typed test
+fixtures also need the fork's funding-domain keys and fields. Frontend tests
+can read backend fixtures, so containerized checks must mount both directories
+with their repository-relative layout. Bound test concurrency on a busy host
+before treating timing failures as product regressions.
 
 Note for rehearsal checkouts: containers build and run as root, so any
 rehearsal that starts the stack against a bind-mounted checkout can create

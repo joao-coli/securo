@@ -498,7 +498,7 @@ function RecurringForm({
   const [endDate, setEndDate] = useState(recurring?.end_date ?? '')
   const [categoryId, setCategoryId] = useState(recurring?.category_id ?? '')
   const [fundingDomainId, setFundingDomainId] = useState(recurring?.funding_domain_id ?? '')
-  const [accountId, setAccountId] = useState(recurring?.account_id ?? sortedAccounts[0]?.id ?? '')
+  const [accountId, setAccountId] = useState(recurring?.account_id ?? '')
   const [isActive, setIsActive] = useState(recurring?.is_active ?? true)
   const [autoGenerate, setAutoGenerate] = useState(recurring?.auto_generate ?? true)
   const selectedAccount = accounts.find((account) => account.id === accountId)
@@ -616,7 +616,7 @@ function RecurringForm({
             onChange={(e) => setAccountId(e.target.value)}
             required
           >
-            {!accountId && <option value="" disabled>{t('recurring.noAccount')}</option>}
+            {!accountId && <option value="" disabled hidden>{t('transactions.createCounterpartSelectAccount')}</option>}
             {sortedAccounts.map((acc) => (
               <option key={acc.id} value={acc.id}>{getAccountName(acc)}</option>
             ))}

@@ -22,6 +22,7 @@ from app.schemas.transaction import (
     BulkFundingDomainRequest,
     BulkTagsRequest,
     CreateCounterpartRequest,
+    DescriptionSuggestion,
     InstallmentSeriesCreate,
     LinkTransferRequest,
     TransactionBulkDeleteRequest,
@@ -140,6 +141,7 @@ async def list_transactions(
     page: int = Query(1, ge=1),
     limit: int = Query(50, ge=1, le=500),
     include_opening_balance: bool = Query(False),
+    include_running_balance: bool = Query(False, description="Fill running_balance per row (issue #1202): one non-credit-card account, `from` set, include_opening_balance, no other filter, default order; null otherwise"),
     exclude_transfers: bool = Query(False),
     user_pnl_only: bool = Query(False, description="Return only rows that count toward dashboard/user income/expense totals"),
     exclude_ignored: bool = Query(False, description="Drop rows the user marked ignored, or whose category is ignored"),
@@ -172,6 +174,8 @@ async def list_transactions(
         min_amount=min_amount,
         max_amount=max_amount,
         include_summary=True,
+        include_running_balance=include_running_balance,
+        primary_currency=ctx.user.primary_currency,
     )
     primary_currency = ctx.user.primary_currency
     items = [_tag_fx_fallback(TransactionRead.model_validate(tx, from_attributes=True), primary_currency) for tx in transactions]
@@ -199,6 +203,17 @@ async def transaction_calendar(
         month,
         account_ids=_merge_id_filters(account_id, account_ids),
     )
+
+
+@router.get("/description-suggestions", response_model=list[DescriptionSuggestion])
+async def description_suggestions(
+    q: str = Query("", max_length=100),
+    limit: int = Query(8, ge=1, le=20),
+    ctx: WorkspaceContext = Depends(current_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """Descriptions used before in this workspace that contain ``q``."""
+    return await transaction_service.suggest_descriptions(session, ctx.workspace.id, q, limit)
 
 
 @router.get("/export")
