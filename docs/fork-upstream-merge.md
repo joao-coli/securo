@@ -85,8 +85,15 @@ Preserve manual choices and add regression tests for any newly bypassed path.
 Prepare the tested images and rollback references. Stop all writers, including
 workers/schedulers; take and verify a fresh backup and recheck data-sensitive
 migration assumptions. Advance the live fork to the tested merge while retaining
-local configuration/work. Apply the rehearsed migration and verify data before
-resuming writers.
+local configuration/work.
+
+Since upstream's `migrate` one-shot service exists, `docker compose up`
+performs the migration itself: every schema-touching service waits for that job
+to exit 0, its own entrypoint refuses to start until the schema is at head, and
+a failed migration stops the stack instead of serving a half-migrated database.
+Let the stack do it rather than running migrations by hand, and verify data
+before resuming writers; a failed migration is the intended failure mode and
+recovers with matching data, code, and images.
 
 Recreate all consumers of changed backend dependencies, including enabled
 optional services. Refresh only the frontend dependency volume as needed;
