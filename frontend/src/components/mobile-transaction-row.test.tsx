@@ -33,6 +33,8 @@ function makeTx(overrides: Partial<Transaction> = {}): Transaction {
     account_id: 'acc-1',
     category_id: null,
     category: null,
+    funding_domain_id: null,
+    funding_domain: null,
     external_id: null,
     description: 'STORE PURCHASE',
     original_description: null,

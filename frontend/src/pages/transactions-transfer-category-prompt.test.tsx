@@ -78,7 +78,8 @@ const counterpartAccount = {
 } as Account
 const transaction: Transaction = {
   id: 'transaction-1', user_id: 'user-1', account_id: checkingAccount.id,
-  category_id: oldCategory.id, category: oldCategory, external_id: null,
+  category_id: oldCategory.id, category: oldCategory,
+  funding_domain_id: null, funding_domain: null, external_id: null,
   description: 'Linked transfer', original_description: null, amount: 25, currency: 'USD',
   date: '2026-10-20', type: 'debit', source: 'manual', status: 'posted', payee: null,
   payee_id: null, payee_name: null, notes: null, transfer_pair_id: 'pair-1',

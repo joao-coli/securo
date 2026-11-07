@@ -60,6 +60,8 @@ function tx(index: number, date: string, runningBalance: number | null): Transac
   return {
     id: `tx-${index}`, user_id: 'user-1', account_id: 'acc-1', category_id: null,
     category: null, external_id: null, description: `Payment ${index}`,
+    funding_domain_id: null,
+    funding_domain: null,
     original_description: null, amount: 1, currency: 'BRL', date, type: 'debit',
     source: 'manual', status: 'posted', payee: null, payee_id: null,
     payee_name: null, notes: null, transfer_pair_id: null, amount_primary: null,

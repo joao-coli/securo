@@ -1778,6 +1778,7 @@ export default function AccountDetailPage() {
             deleteLoading={deleteAllocationMutation.isPending}
           />
         </div>
+      )}
 
       {account.type === 'loan' && (
         <LoanScheduleCard accountId={account.id} locale={locale} dateLocale={dateLocale} mask={mask} canWrite={canWrite} />

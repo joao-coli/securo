@@ -167,6 +167,8 @@ function transferLegFixture(pairId: string, over: Partial<Transaction> = {}): Tr
     account_id: 'acc-a',
     category_id: null,
     category: null,
+    funding_domain_id: null,
+    funding_domain: null,
     external_id: null,
     description: 'R1160 transfer repro',
     original_description: null,

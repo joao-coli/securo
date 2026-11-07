@@ -84,6 +84,8 @@ const crowded: Transaction = {
   // would otherwise pass on the description's own text.
   description: 'Payment to Vinicius in 18 parts',
   category_id: 'cat-1',
+  funding_domain_id: null,
+  funding_domain: null,
   category: {
     id: 'cat-1', name: 'Transfers', icon: 'arrow-left-right',
     color: '#6B7280', treat_as_transfer: true,

@@ -29,6 +29,7 @@ describe('buildInstallmentSeriesInput', () => {
   it('keeps the domain selected in the transaction form', () => {
     const selected = { ...base, fundingDomainId: 'domain-1' }
     expect(buildInstallmentSeriesInput(selected).base.funding_domain_id).toBe('domain-1')
+  })
 
   it('carries a split across categories to every parcel, without a single category', () => {
     const categoryLines = {

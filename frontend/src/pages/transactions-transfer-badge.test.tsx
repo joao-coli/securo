@@ -75,6 +75,7 @@ const TOOLTIP = 'Transfers are excluded from report and dashboard totals'
 function tx(over: Partial<Transaction> & { id: string; description: string }): Transaction {
   return {
     user_id: 'user-1', account_id: 'acc-1', category_id: null, category: null,
+    funding_domain_id: null, funding_domain: null,
     external_id: null, original_description: null, amount: 1, currency: 'BRL',
     date: '2026-10-08', type: 'debit', source: 'manual', status: 'posted',
     payee: null, payee_id: null, payee_name: null, notes: null,
