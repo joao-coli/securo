@@ -10,6 +10,7 @@ import { localDateString } from '@/lib/date-utils'
 import { applyTransactionToBalance, excludeMaterializedProjections, mergeRunningBalances, runningBalanceChartFrom, transactionAmountForBalance } from '@/lib/account-detail-utils'
 import { invalidateFinancialQueries } from '@/lib/invalidate-queries'
 import { shouldShowPendingBadge } from '@/lib/transaction-status'
+import { isTransferTransaction } from '@/lib/transaction-transfer'
 import { closeDateForBill, isOpenCycleWindow } from '@/lib/credit-card-cycle'
 import { toast } from 'sonner'
 import type { CreditCardBill, CreditCardPaymentAllocation, CreditCardPaymentCandidate, FundingDomain, ProjectedTransaction, Transaction } from '@/types'
@@ -19,6 +20,8 @@ import { ArrowLeft, ArrowLeftRight, CalendarClock, ChevronLeft, ChevronRight, Cl
 import { MobileTransactionRow } from '@/components/mobile-transaction-row'
 import { transactionDescription } from '@/lib/transaction-description'
 import { CategoryIcon } from '@/components/category-icon'
+import { CategorySplitBadge, TransactionCategoryIcon } from '@/components/category-lines-display'
+import { isSplitByCategory, projectedSplitSource } from '@/lib/category-lines'
 import { ProjectedTransactionBadge } from '@/components/projected-transaction-badge'
 import { TransactionDialog, type TransactionSavePayload } from '@/components/transaction-dialog'
 import { extractApiError } from '@/lib/api-errors'
@@ -35,7 +38,8 @@ import { cn } from '@/lib/utils'
 import { useWorkspace } from '@/contexts/workspace-context'
 import { useCreateTransaction } from '@/hooks/use-create-transaction'
 import { resolveDateFnsLocale } from '@/lib/date-fns-locale'
-import { formatCurrency } from '@/lib/format'
+import { formatCompactCurrency, formatCurrency } from '@/lib/format'
+import { LoanScheduleCard } from '@/components/loan-schedule-card'
 import {
   AreaChart,
   Area,
@@ -315,6 +319,7 @@ export default function AccountDetailPage() {
     queryFn: () => accounts.get(id!),
     enabled: !!id,
   })
+  const isCreditCard = account?.type === 'credit_card'
 
   // Bills (faturas) from the provider's bills feed — issue #92. Only fetched
   // for CC accounts; non-CC and CC-without-bills both return [] so the UI
@@ -573,7 +578,15 @@ export default function AccountDetailPage() {
   // client-side cycle math below, which needs every row of the cycle rather
   // than the first page (#1202).
   const { data: cycleTxData, isLoading: cycleTxLoading } = useQuery({
-    queryKey: ['transactions', { account_id: id, bill_id: activeBill?.id, from: filterFrom, to: filterTo, include_opening_balance: true, unbilled_only: isInProgressCycle }],
+    queryKey: ['transactions', {
+      account_id: id,
+      bill_id: activeBill?.id,
+      from: filterFrom,
+      to: filterTo,
+      include_opening_balance: true,
+      unbilled_only: isInProgressCycle,
+      statement_view: isCreditCard,
+    }],
     queryFn: async () => {
       const params = {
         account_id: id,
@@ -586,6 +599,9 @@ export default function AccountDetailPage() {
         // current view), exclude already-billed txs so the bar/list only
         // shows what's accumulating toward the next bill.
         unbilled_only: isInProgressCycle || undefined,
+        // Credit-card cycle windows represent statements, so they are always
+        // filtered by purchase date even when reporting uses accrual dates.
+        statement_view: isCreditCard || undefined,
         from: filterFrom || undefined,
         to: filterTo || undefined,
         limit: CYCLE_PAGE_SIZE,
@@ -821,7 +837,6 @@ export default function AccountDetailPage() {
   })
 
   // Whether to use primary currency amounts (for foreign-currency accounts with toggle, or domestic accounts with foreign txs)
-  const isCreditCard = account?.type === 'credit_card'
   const isForeignCurrency = account ? account.currency !== userCurrency : false
   // No real FX rate: the summary leaves the *_primary fields unset, so stay on
   // the account's own currency instead of labelling native amounts as converted.
@@ -864,7 +879,7 @@ export default function AccountDetailPage() {
             color: p.category_color ?? '',
             is_system: false,
             is_hidden: false,
-            treat_as_transfer: false,
+            treat_as_transfer: p.category_treat_as_transfer,
             is_ignored: false,
           }
         : null,
@@ -896,6 +911,7 @@ export default function AccountDetailPage() {
       splits: [],
       is_ignored: false,
       virtual: true,
+      ...projectedSplitSource(p),
     }))
   }, [projectedTxData, ledgerItems, id])
 
@@ -1762,6 +1778,9 @@ export default function AccountDetailPage() {
             deleteLoading={deleteAllocationMutation.isPending}
           />
         </div>
+
+      {account.type === 'loan' && (
+        <LoanScheduleCard accountId={account.id} locale={locale} dateLocale={dateLocale} mask={mask} canWrite={canWrite} />
       )}
 
       {/* Balance / Cycle spending chart */}
@@ -1855,12 +1874,12 @@ export default function AccountDetailPage() {
                   tickFormatter={(v) => {
                     if (privacyMode) return ''
                     if (v === 0) return '0'
-                    return formatCurrency(v, displayCurrency, locale).replace(/,00$/, '').replace(/\.00$/, '')
+                    return formatCompactCurrency(v, displayCurrency, locale)
                   }}
                   tick={{ fontSize: 10, fill: 'var(--muted-foreground)' }}
                   axisLine={false}
                   tickLine={false}
-                  width={56}
+                  width={64}
                   tickCount={5}
                   domain={[
                     (dataMin: number) => dataMin < 0 ? Math.floor(dataMin / 100) * 100 : 0,
@@ -2020,6 +2039,7 @@ export default function AccountDetailPage() {
                 <tbody>
                   {displayRows.map((tx) => {
                     const isOpening = tx.source === 'opening_balance'
+                    const isTransfer = isTransferTransaction(tx)
                     const isTransfer = !!tx.transfer_pair_id
                     const isAssignable = assignableStatementTxIds.has(tx.id)
                     const isIgnored = tx.is_ignored
@@ -2128,7 +2148,12 @@ export default function AccountDetailPage() {
                           )}
                         </td>
                         <td className="px-4 py-3 hidden md:table-cell">
-                          {tx.category ? (
+                          {isSplitByCategory(tx) ? (
+                            <span className="flex items-center gap-1.5">
+                              <TransactionCategoryIcon tx={tx} size="sm" />
+                              <CategorySplitBadge tx={tx} />
+                            </span>
+                          ) : tx.category ? (
                             <span className="flex items-center gap-1.5">
                               <CategoryIcon icon={tx.category.icon} color={tx.category.color} size="sm" />
                               <span className="text-sm text-muted-foreground">{tx.category.name}</span>

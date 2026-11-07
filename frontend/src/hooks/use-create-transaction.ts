@@ -65,6 +65,11 @@ export function useCreateTransaction({ onDone }: { onDone: () => void }) {
           category_id: payload.tx.category_id || undefined,
           funding_domain_id: payload.tx.funding_domain_id || undefined,
           account_id: payload.tx.account_id || undefined,
+          // The recurring entry keeps the split, so every later occurrence
+          // starts with the same parts.
+          ...(payload.tx.category_lines?.lines.length
+            ? { category_lines: payload.tx.category_lines, category_id: undefined }
+            : {}),
           skip_first: true,
         } as Record<string, unknown>)
       }

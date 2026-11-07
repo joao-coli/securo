@@ -7,6 +7,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.app_clock import app_today
@@ -16,6 +17,8 @@ from app.core.workspace_context import (
     current_workspace,
     current_writable_workspace,
 )
+from app.models.account import Account
+from app.models.transaction import Transaction
 from app.schemas.transaction import (
     BulkAddToGroupRequest,
     BulkCategorizeRequest,
@@ -28,12 +31,14 @@ from app.schemas.transaction import (
     TransactionBulkDeleteRequest,
     TransactionCreate,
     TransactionRead,
+    TransactionTransferCounterpart,
     TransactionUpdate,
     TransferCreate,
     TransferRead,
 )
 from app.schemas.transaction_calendar import TransactionCalendarResponse
 from app.services import transaction_service
+from app.services.category_line_service import csv_export_parts
 from app.services.admin_service import get_credit_card_accounting_mode
 from app.services.transaction_calendar_service import get_transaction_calendar
 
@@ -67,6 +72,52 @@ async def _attach_invoice_links(session, ctx, items: list) -> None:
         item.invoice_links = [
             TransactionInvoiceLink(**link) for link in links.get(item.id, [])
         ]
+
+
+async def _attach_transfer_counterparts(
+    session: AsyncSession, workspace_id: uuid.UUID, items: list[TransactionRead]
+) -> None:
+    """Name the account each transfer row is linked to, for the badge.
+
+    The list marks transfer rows with a badge but said nothing about what
+    the row is connected to (issue #810). Both legs of a pair share
+    ``transfer_pair_id``, so one query over the page's pair ids fetches
+    every other leg in the workspace. The other leg is found even when
+    the account filter keeps it off the page, and a page without
+    transfers costs nothing: no query, no field change.
+    """
+    pair_ids = {item.transfer_pair_id for item in items if item.transfer_pair_id}
+    if not pair_ids:
+        return
+
+    result = await session.execute(
+        select(
+            Transaction.id,
+            Transaction.transfer_pair_id,
+            Transaction.account_id,
+            # The name the rest of the UI shows: the user's override, or
+            # the provider's name when there is none.
+            func.coalesce(Account.display_name, Account.name),
+        )
+        .join(Account, Account.id == Transaction.account_id)
+        .where(
+            Transaction.workspace_id == workspace_id,
+            Transaction.transfer_pair_id.in_(pair_ids),
+        )
+    )
+    legs: dict[uuid.UUID, list[tuple[uuid.UUID, uuid.UUID, str]]] = {}
+    for tx_id, pair_id, account_id, account_name in result:
+        legs.setdefault(pair_id, []).append((tx_id, account_id, account_name))
+
+    for item in items:
+        if item.transfer_pair_id is None:
+            continue
+        for tx_id, account_id, account_name in legs.get(item.transfer_pair_id, []):
+            if tx_id != item.id:
+                item.transfer_counterpart = TransactionTransferCounterpart(
+                    account_id=account_id, account_name=account_name
+                )
+                break
 
 
 def _tag_fx_fallback(tx: TransactionRead, primary_currency: str) -> TransactionRead:
@@ -134,6 +185,7 @@ async def list_transactions(
     bill_id: Optional[uuid.UUID] = Query(None, description="Filter by credit-card bill (issue #92); takes precedence over from/to"),
     group_id: Optional[uuid.UUID] = Query(None, description="Filter to transactions split through this group; widens visibility for linked members"),
     unbilled_only: bool = Query(False, description="Cycle-math fallback only: exclude txs already linked to any bill (used for in-progress CC cycles)"),
+    statement_view: bool = Query(False, description="Filter credit-card statement-cycle transactions by purchase date, independent of accounting mode"),
     q: Optional[str] = Query(None),
     uncategorized: bool = Query(False),
     type: Optional[str] = Query(None),
@@ -169,6 +221,7 @@ async def list_transactions(
         bill_id=bill_id,
         group_id=group_id,
         unbilled_only=unbilled_only,
+        statement_view=statement_view,
         sort_by=sort_by,
         sort_dir=sort_dir,
         min_amount=min_amount,
@@ -180,6 +233,7 @@ async def list_transactions(
     primary_currency = ctx.user.primary_currency
     items = [_tag_fx_fallback(TransactionRead.model_validate(tx, from_attributes=True), primary_currency) for tx in transactions]
     await _attach_invoice_links(session, ctx, items)
+    await _attach_transfer_counterparts(session, ctx.workspace.id, items)
     summary_out = (
         TransactionsSummary(**summary, currency=primary_currency)
         if summary is not None
@@ -260,24 +314,31 @@ async def export_transactions(
     output = io.StringIO()
     output.write("﻿")  # UTF-8 BOM for Excel
     writer = csv.writer(output)
-    writer.writerow(["date", "description", "amount", "type", "currency", "category", "account", "payee", "payee_name", "notes", "status", "source", "amount_primary", "fx_rate_used"])
+    writer.writerow(["date", "description", "amount", "type", "currency", "category", "account", "payee", "payee_name", "notes", "status", "source", "amount_primary", "fx_rate_used", "split_group", "split_index"])
     for tx in transactions:
-        writer.writerow([
-            tx.date.isoformat(),
-            tx.description,
-            str(tx.amount),
-            tx.type,
-            tx.currency,
-            tx.category.name if tx.category else "",
-            tx.account.name if tx.account else "",
-            tx.payee or "",
-            getattr(tx, "payee_name", "") or "",
-            tx.notes or "",
-            tx.status,
-            tx.source,
-            str(tx.amount_primary) if tx.amount_primary is not None else "",
-            str(tx.fx_rate_used) if tx.fx_rate_used is not None else "",
-        ])
+        # A transaction split across categories leaves one row per part, so
+        # a spreadsheet summing `amount` by `category` gets the same figures
+        # as the reports. `split_group` (the transaction id) and
+        # `split_index` let an import put the parts back together.
+        for amount, amount_primary, category, split_group, split_index in csv_export_parts(tx):
+            writer.writerow([
+                tx.date.isoformat(),
+                tx.description,
+                str(amount),
+                tx.type,
+                tx.currency,
+                category.name if category else "",
+                tx.account.name if tx.account else "",
+                tx.payee or "",
+                getattr(tx, "payee_name", "") or "",
+                tx.notes or "",
+                tx.status,
+                tx.source,
+                str(amount_primary) if amount_primary is not None else "",
+                str(tx.fx_rate_used) if tx.fx_rate_used is not None else "",
+                split_group,
+                split_index,
+            ])
 
     output.seek(0)
     today = app_today().isoformat()
@@ -294,13 +355,18 @@ async def bulk_categorize(
     ctx: WorkspaceContext = Depends(current_writable_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
+    # Counted before the update: split rows are left alone, and the client
+    # says how many, whatever page it is showing by the time this returns.
+    skipped_split = await transaction_service.count_split_rows(
+        session, ctx.workspace.id, data.transaction_ids
+    )
     try:
         count = await transaction_service.bulk_update_category(
             session, ctx.workspace.id, data.transaction_ids, data.category_id
         )
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
-    return {"updated": count}
+    return {"updated": count, "skipped_split": skipped_split}
 
 
 @router.patch("/bulk-funding-domain")
@@ -567,7 +633,30 @@ async def toggle_ignore_transaction(
     ctx: WorkspaceContext = Depends(current_writable_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
-    transaction = await transaction_service.toggle_ignore_transaction(
+    try:
+        transaction = await transaction_service.toggle_ignore_transaction(
+            session, transaction_id, ctx.workspace.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    if not transaction:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
+    primary_currency = ctx.user.primary_currency
+    return _tag_fx_fallback(TransactionRead.model_validate(transaction, from_attributes=True), primary_currency)
+
+
+@router.post("/{transaction_id}/post-today", response_model=TransactionRead)
+async def post_transaction_today(
+    transaction_id: uuid.UUID,
+    ctx: WorkspaceContext = Depends(current_writable_workspace),
+    session: AsyncSession = Depends(get_async_session),
+):
+    """One-click "it cleared today" for a pending transaction.
+
+    Marks the transaction as posted and stamps today's calendar date, resolved
+    in the workspace's timezone, the same as saving the edit dialog by hand.
+    """
+    transaction = await transaction_service.post_transaction_today(
         session, transaction_id, ctx.workspace.id
     )
     if not transaction:
@@ -601,9 +690,12 @@ async def delete_transaction(
     ctx: WorkspaceContext = Depends(current_writable_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
-    deleted = await transaction_service.delete_transaction(
-        session, transaction_id, ctx.workspace.id, apply_to
-    )
+    try:
+        deleted = await transaction_service.delete_transaction(
+            session, transaction_id, ctx.workspace.id, apply_to
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Transaction not found")
 
@@ -614,7 +706,10 @@ async def bulk_delete_transactions(
     ctx: WorkspaceContext = Depends(current_writable_workspace),
     session: AsyncSession = Depends(get_async_session),
 ):
-    deleted_count = await transaction_service.bulk_delete_transactions(
-        session, ctx.workspace.id, data.transaction_ids
-    )
+    try:
+        deleted_count = await transaction_service.bulk_delete_transactions(
+            session, ctx.workspace.id, data.transaction_ids
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     return {"deleted": deleted_count}
