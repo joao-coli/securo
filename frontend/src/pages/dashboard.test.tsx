@@ -34,6 +34,13 @@ const api = vi.hoisted(() => ({
 
 vi.mock('@/lib/api', () => api)
 
+// The transaction dialog reads the workspace context for funding domains;
+// CategorySelect consumes WorkspaceContext directly.
+vi.mock('@/contexts/workspace-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/contexts/workspace-context')>()),
+  useWorkspace: () => ({ current: null }),
+}))
+
 vi.mock('@/hooks/use-display-locale', () => ({
   useDisplayLocale: () => 'en-US',
   useDateLocale: () => 'en-US',

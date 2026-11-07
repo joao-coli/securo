@@ -2041,7 +2041,6 @@ export default function AccountDetailPage() {
                   {displayRows.map((tx) => {
                     const isOpening = tx.source === 'opening_balance'
                     const isTransfer = isTransferTransaction(tx)
-                    const isTransfer = !!tx.transfer_pair_id
                     const isAssignable = assignableStatementTxIds.has(tx.id)
                     const isIgnored = tx.is_ignored
                     const isVirtual = tx.virtual === true
