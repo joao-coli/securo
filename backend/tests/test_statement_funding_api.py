@@ -14,6 +14,56 @@ def money(value) -> Decimal:
 
 
 @pytest.mark.asyncio
+async def test_reporting_override_is_rejected_without_changing_card_funding(
+    client: AsyncClient, auth_headers: dict,
+):
+    card_response = await client.post(
+        "/api/accounts", headers=auth_headers,
+        json={"name": "Funding card", "type": "credit_card", "currency": "BRL", "balance": "0"},
+    )
+    assert card_response.status_code == 201, card_response.text
+    card_id = card_response.json()["id"]
+    domain_response = await client.post(
+        "/api/funding-domains", headers=auth_headers, json={"name": "Apartment"},
+    )
+    assert domain_response.status_code == 201, domain_response.text
+    domain_id = domain_response.json()["id"]
+    created = await client.post(
+        "/api/transactions", headers=auth_headers,
+        json={
+            "account_id": card_id, "funding_domain_id": domain_id,
+            "description": "Furniture", "amount": "80", "currency": "BRL",
+            "date": "2026-05-10", "type": "debit",
+        },
+    )
+    assert created.status_code == 201, created.text
+    changed = await client.patch(
+        f"/api/transactions/{created.json()['id']}", headers=auth_headers,
+        json={"reporting_date_override": "2026-06-10"},
+    )
+    assert changed.status_code == 400, changed.text
+    saved = await client.get(
+        f"/api/transactions/{created.json()['id']}", headers=auth_headers,
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["funding_domain_id"] == domain_id
+    assert saved.json()["reporting_date_override"] is None
+
+    window = {"from": "2026-05-01", "to": "2026-05-31"}
+    funding = await client.get(
+        f"/api/accounts/{card_id}/statement-funding", headers=auth_headers, params=window,
+    )
+    summary = await client.get(
+        f"/api/accounts/{card_id}/summary", headers=auth_headers, params=window,
+    )
+    assert funding.status_code == 200, funding.text
+    assert summary.status_code == 200, summary.text
+    assert money(funding.json()["expected_amount"]) == Decimal("80")
+    assert money(summary.json()["monthly_expenses"]) == Decimal("80")
+    assert funding.json()["lines"][0]["funding_domain_id"] == domain_id
+
+
+@pytest.mark.asyncio
 async def test_statement_funding_report_tracks_partial_domain_payment(
     client: AsyncClient,
     auth_headers: dict,

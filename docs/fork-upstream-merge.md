@@ -16,6 +16,11 @@ recovery. Pause writers when needed for database/file consistency. Keep backups
 private and git-ignored, verify checksums, and restore-test in a separate database.
 Retain the backup location and matching rollback commit/image references.
 
+Include plugin runner storage when code plugins are enabled; its private files
+are separate from PostgreSQL. Plugin connection state and saved provider
+credentials live in the database. Keep the matching `SECRET_KEY` with private
+configuration backups so encrypted credentials remain readable after a restore.
+
 ## 2. Merge in isolation
 
 Fetch and pin the intended upstream release or branch. Merge into a separate
@@ -101,6 +106,19 @@ retain database and uploaded-file volumes. Verify actual mounts/images, startup
 logs, frontend-proxied API health, authenticated workspaces, and affected flows.
 On failure, stop writers and recover with matching data, code, and images;
 rolling back only an image cannot undo schema changes.
+
+Provider credentials saved under Admin override environment values field by
+field; the migration does not import environment credentials, so retain existing
+configuration. Check provider status without starting a bank sync during a
+rehearsal. Follow [provider settings](provider-settings.md) before downgrading:
+long encrypted values can prevent shrinking the settings column, and older
+versions do not apply the same credential protections.
+
+Plugins remain opt-in. Data/theme plugins need no runner; code plugins add a
+runner, egress service, credentials, and persistent storage. Keep them disabled
+unless explicitly needed, and include enabled optional services in image and
+rollback validation. See the Compose files and plugin documentation for the
+current settings rather than copying credentials between environments.
 
 ## 6. Finish and maintain
 
