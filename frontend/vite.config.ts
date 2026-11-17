@@ -44,7 +44,7 @@ export default defineConfig(async ({ mode }) => {
     server: {
       port: 5173,
       host: '0.0.0.0',
-      allowedHosts: getFrontendHost(frontendUrl),
+      allowedHosts: ['palhoca-server', ...getFrontendHost(frontendUrl)],
       proxy: {
         '/api': {
           target: backendUrl ?? 'http://localhost:8000',
